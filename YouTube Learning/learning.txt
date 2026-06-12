@@ -1,0 +1,19 @@
+youtube
+
+redis session managment
+
+database partition shards
+
+how to achieve scaling in aws
+
+read replica
+
+Rate Limiting
+
+saga pattern
+
+tutorials 
+
+spring boot
+
+microservices patterns and implementation

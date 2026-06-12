@@ -1,0 +1,32 @@
+spring:
+  application:
+    name: shopverse-gateway
+  cloud:
+    gateway:
+      routes:
+        - id: shopverse-api
+          uri: http://shopverse-web:8080
+          predicates:
+            - Path=/api/**
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 100
+                redis-rate-limiter.burstCapacity: 200
+            - name: CircuitBreaker
+              args:
+                name: shopverse-cb
+                fallbackUri: forward:/fallback
+        - id: shopverse-actuator
+          uri: http://shopverse-web:8080
+          predicates:
+            - Path=/actuator/**
+
+server:
+  port: 8090
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,gateway

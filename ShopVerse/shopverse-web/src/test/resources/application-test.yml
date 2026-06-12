@@ -1,0 +1,91 @@
+# ─── Test profile — H2 in-memory, no external services ───────────────────────
+spring:
+  datasource:
+    url: jdbc:h2:mem:shopverse_test;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;NON_KEYWORDS=VALUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop          # Hibernate generates schema from entities
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+        default_batch_fetch_size: 10
+        format_sql: false
+    open-in-view: false
+
+  flyway:
+    enabled: false                   # Flyway migrations use PG-specific SQL (pg_trgm, partitions)
+
+  # Spring's simple (ConcurrentHashMap) cache — no Redis needed
+  cache:
+    type: simple
+
+  # Exclude all auto-configs that connect to external services we don't want in tests
+  autoconfigure:
+    exclude:
+      - org.redisson.spring.starter.RedissonAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.mongodb.MongoAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.mongodb.MongoRepositoriesAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.mongodb.MongoDataAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.cassandra.CassandraAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.cassandra.CassandraDataAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.cassandra.CassandraRepositoriesAutoConfiguration
+      - org.springframework.boot.autoconfigure.neo4j.Neo4jAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.neo4j.Neo4jDataAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.neo4j.Neo4jRepositoriesAutoConfiguration
+      - org.springframework.boot.autoconfigure.elasticsearch.ElasticsearchClientAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.elasticsearch.ElasticsearchDataAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.elasticsearch.ElasticsearchRepositoriesAutoConfiguration
+      - org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
+      - org.springframework.kafka.annotation.KafkaListenerAnnotationBeanPostProcessor
+
+  # Stub values — actual connections are replaced by @MockBean in BaseIntegrationTest
+  data:
+    redis:
+      host: localhost
+      port: 6379
+    mongodb:
+      uri: mongodb://localhost:27017/shopverse_test
+    elasticsearch:
+      uris: http://localhost:9200
+  neo4j:
+    uri: bolt://localhost:7687
+    authentication:
+      username: neo4j
+      password: shopverse
+  cassandra:
+    contact-points: localhost
+    port: 9042
+    keyspace-name: shopverse_test
+    local-datacenter: datacenter1
+  kafka:
+    bootstrap-servers: localhost:9092
+
+shopverse:
+  jwt:
+    secret: test-secret-minimum-32-chars-shopverse!!
+    expiration-ms: 3600000
+  admin:
+    secret: test-admin-secret
+
+management:
+  health:
+    redis:
+      enabled: false
+    mongo:
+      enabled: false
+    cassandra:
+      enabled: false
+    elasticsearch:
+      enabled: false
+    kafka:
+      enabled: false
+
+logging:
+  level:
+    com.shopverse: WARN
+    org.hibernate.SQL: DEBUG
+    org.springframework.test: WARN

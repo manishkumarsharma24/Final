@@ -1,0 +1,152 @@
+# Ch03-09: Spring Boot auto-configuration properties
+spring:
+  application:
+    name: shopverse
+
+  # Ch04-01: JPA / Hibernate
+  datasource:
+    url: jdbc:postgresql://localhost:5432/shopverse
+    username: ${DB_USER:shopverse}
+    password: ${DB_PASS:shopverse}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+  jpa:
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        default_batch_fetch_size: 50
+        jdbc.batch_size: 50
+        order_inserts: true
+        order_updates: true
+    open-in-view: false
+
+  # Ch05-01: Flyway
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    validate-on-migrate: false
+
+  # Ch06-01: Redis
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      # Leave password unset when REDIS_PASS is not provided — Spring Data Redis
+      # treats empty string as "no password" (RedisPassword.of("") = none()),
+      # but Redisson does not; see RedissonConfig for the Redisson fix.
+      password: ${REDIS_PASS:}
+      lettuce:
+        pool:
+          max-active: 16
+          max-idle: 8
+    # Ch06-05: MongoDB
+    mongodb:
+      uri: ${MONGO_URI:mongodb://localhost:27017/shopverse}
+    # Ch06-03: Cassandra (connection settings moved to spring.cassandra.* in Spring Boot 3.x — see below)
+    # Ch06-04: Neo4j (repositories config only — driver config moved to spring.neo4j.* in Spring Boot 3.x)
+    # Ch08-01: Elasticsearch
+    elasticsearch:
+      uris: ${ES_URI:http://localhost:9200}
+
+  # Ch06-04: Neo4j (Spring Boot 3.x uses spring.neo4j.* for driver config)
+  neo4j:
+    uri: ${NEO4J_URI:bolt://localhost:7687}
+    authentication:
+      username: ${NEO4J_USER:neo4j}
+      password: ${NEO4J_PASS:shopverse}
+
+  # Ch06-03: Cassandra (Spring Boot 3.x uses spring.cassandra.* not spring.data.cassandra.*)
+  cassandra:
+    contact-points: ${CASSANDRA_HOST:localhost}
+    port: 9042
+    keyspace-name: shopverse
+    local-datacenter: datacenter1
+    schema-action: NONE
+
+  # Ch12-01: Kafka
+  kafka:
+    bootstrap-servers: ${KAFKA_BROKERS:localhost:9092}
+    admin:
+      fail-fast: false
+      operation-timeout: 5
+      properties:
+        request.timeout.ms: 5000
+        default.api.timeout.ms: 5000
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all
+      retries: 3
+    consumer:
+      group-id: shopverse-consumer
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "com.shopverse.*"
+
+  # Ch07-03: i18n
+  messages:
+    basename: i18n/messages
+    encoding: UTF-8
+
+# Ch07-06: JWT
+shopverse:
+  jwt:
+    secret: ${JWT_SECRET:change-this-secret-in-production-minimum-32-chars}
+    expiration-ms: 86400000
+  admin:
+    secret: ${ADMIN_SECRET:shopverse-admin-secret}
+
+# Ch16-02: Actuator + Micrometer + OpenTelemetry (merged — duplicate keys overwrite in YAML)
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+  tracing:
+    sampling:
+      probability: 1.0
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://otel-collector:4318/v1/traces}
+
+# Ch16-03: Resilience4j circuit breaker defaults
+resilience4j:
+  circuitbreaker:
+    instances:
+      productService:
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        sliding-window-size: 10
+      search:
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 5s
+        sliding-window-size: 10
+  ratelimiter:
+    instances:
+      apiRateLimit:
+        limit-for-period: 100
+        limit-refresh-period: 1s
+
+server:
+  port: 8080
+  compression:
+    enabled: true
+    mime-types: application/json,text/html
+
+logging:
+  level:
+    com.shopverse: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.springframework.kafka: WARN
+    org.apache.kafka: WARN

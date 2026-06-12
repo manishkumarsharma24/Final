@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shopverse-config
+  namespace: shopverse
+data:
+  REDIS_HOST: "shopverse-redis"
+  KAFKA_BROKERS: "shopverse-kafka:9092"
+  ES_URI: "http://shopverse-elasticsearch:9200"
+  MONGO_URI: "mongodb://shopverse-mongo:27017/shopverse"
+  CASSANDRA_HOST: "shopverse-cassandra"

@@ -1,0 +1,31 @@
+# Compiled files
+*.jar
+*.war
+*.class
+*.ear
+
+# Maven build output
+**/target/
+
+# IDE files
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Node (shopverse-ui)
+node_modules/
+dist/
+dist-ssr/
+
+# Environment
+.env
+.env.local

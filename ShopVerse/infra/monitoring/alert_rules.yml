@@ -1,0 +1,33 @@
+groups:
+  - name: shopverse_alerts
+    rules:
+      - alert: HighErrorRate
+        expr: rate(http_server_requests_seconds_count{status=~"5.."}[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High 5xx error rate on {{ $labels.instance }}"
+
+      - alert: HighResponseTime
+        expr: histogram_quantile(0.95, rate(http_server_requests_seconds_bucket[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "P95 latency > 2s on {{ $labels.instance }}"
+
+      - alert: LowStockAlert
+        expr: shopverse_inventory_stock_quantity < 10
+        labels:
+          severity: warning
+        annotations:
+          summary: "Product {{ $labels.product_id }} low stock"
+
+      - alert: DatabaseConnectionPoolExhausted
+        expr: hikaricp_connections_active / hikaricp_connections_max > 0.9
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "HikariCP pool nearly exhausted"

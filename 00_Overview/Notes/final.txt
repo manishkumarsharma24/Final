@@ -1,0 +1,144 @@
+==========================================Java==========================================================
+
+JVM=======
+
+JDK=======
+
+Class Loaders======
+
+OOP=======
+
+Abstract Class vs. Interface====
+
+Constructor vs. Method======
+
+Stack vs. Heap Memory====
+
+String======
+
+== vs. .equals() =======
+
+Collections Framework=====
+
+		Fail-Fast vs. Fail-Safe: 
+
+		List 
+
+		Map
+
+
+
+Exception Handling======
+
+		Checked vs. Unchecked
+
+		Final vs. Finally vs. Finalize
+
+		Try-with-resources
+
+Multithreading & Concurrency======
+
+Modern Java (Java 8 to Java 25)=============
+
+Java 9 (September 2017)===
+
+Module System: ====
+
+Introduced Project Jigsaw to modularize the JDK code.
+
+		A modular project requires a specific folder layout. Each module directory must contain a module-info.java file at its root. 
+
+		tax-system/
+├── com.service.provider/
+│   ├── module-info.java
+│   └── com/service/provider/
+│       ├── api/
+│       │   └── TaxCalculator.java      <-- Public API (Exported)
+│       └── internal/
+│           └── Obfuscator.java         <-- Hidden Engine (Not Exported)
+│
+└── com.client.consumer/
+    ├── module-info.java
+    └── com/client/consumer/
+        └── App.java
+
+
+// File: tax-system/com.service.provider/module-info.java
+module com.service.provider {
+    // Only expose the API package
+    exports com.service.provider.api; 
+}
+
+
+
+
+
+        Module 1: The Core Engine (com.engine.core)This module contains the logic. We will explicitly export the package containing PaymentService while keeping InternalHelper entirely hidden from other modules.1. The Module Descriptorjava// File: com.engine.core/module-info.java
+module com.engine.core {
+    // Only export this specific package to the outside world
+    exports com.engine.core; 
+}
+Use code with caution.2. The Shared Classjava// File: com.engine.core/com/engine/core/PaymentService.java
+package com.engine.core;
+
+public class PaymentService {
+    public void process(double amount) {
+        System.out.println("Processing payment of ₹" + amount);
+    }
+}
+Use code with caution.3. The Hidden Internal Classjava// File: com.engine.core/com/engine/core/InternalHelper.java
+package com.engine.core;
+
+// Even though this class is public, it cannot be imported outside 
+// this module because its package layout is strictly encapsulated.
+public class InternalHelper {
+    public void secureLog() {
+        System.out.println("Internal secure logging...");
+    }
+}
+Use code with caution.💻 Module 2: The Client Application (com.client.app)This module contains our application entry point. It must explicitly declare its dependency on the core engine module to use its classes.1. The Module Descriptorjava// File: com.client.app/module-info.java
+module com.client.app {
+    // Expressly declare dependency on the other module name
+    requires com.engine.core; 
+}
+Use code with caution.2. The Main Application Codejava// File: com.client.app/com/client/app/MainApplication.java
+package com.client.app;
+
+// Import is permitted because com.engine.core exports this package
+import com.engine.core.PaymentService; 
+
+// Trying to import com.engine.core.InternalHelper here 
+// will trigger a compile-time error!
+
+public class MainApplication {
+    public static void main(String[] args) {
+        PaymentService service = new PaymentService();
+        service.process(1500.50);
+    }
+}
+
+Compile and Run via Terminal, use the --module-source-path flag during compilation and the --module flag for execution.
+
+Step 1: Compile both modules into an output folder (mods)bash
+
+javac -d mods --module-source-path . $(find . -name "*.java")
+
+
+Step 2: Run the Main application using the module pathwaybash
+
+java --module-path mods --module com.client.app/com.client.app.MainApplication
+
+Console Output:textProcessing payment of ₹1500.50
+
+		Factories: Added List.of(), Set.of(), and Map.of().
+
+		JShell: Interactive Command Line Interface (CLI) for running Java code snippets.
+
+		Private Interface Methods: Allowed interfaces to split logic into private helper methods.
+
+		📅 Java 10 (March 2018)Local Variable Type Inference: Introduced the var keyword for clean local declarations.Parallel G1 Garbage Collector: Improved the G1 collector's full GC pause times.📅 Java 11 — LTS Release (September 2018)New HTTP Client: Built-in HTTP/2 and WebSocket client (java.net.http).Run Source Files Directly: Ability to execute single-file source code via java HelloWorld.java.String API Upgrades: Added helper methods like isBlank(), lines(), strip(), and repeat().📅 Java 14 (March 2020)Switch Expressions: Standardized the arrow syntax (->) and value-returning switch blocks.Helpful NullPointerExceptions: JVM precisely logs which exact variable caused a null exception.📅 Java 15 (September 2020)Text Blocks: Standardized multi-line string literals (""") to preserve structural formatting.📅 Java 16 (March 2021)Records: Standardized compact, immutable data classes with automatic boilerplates.Pattern Matching for instanceof: Unified type checking and casting into a single step.Vector API (Incubator): Vector computations that map optimally to CPU architectures.📅 Java 17 — LTS Release (September 2021)Sealed Classes: Standardized closed inheritance structures using the sealed and permits modifiers.ZGC Upgrades: Made the ultra-low latency Z Garbage Collector production-ready.📅 Java 21 — LTS Release (September 2023)Virtual Threads: Lightweight, JVM-managed concurrent threads for massive throughput scaling.Pattern Matching for Switch: Expanded pattern matching syntax directly into switch selectors.Sequenced Collections: New interfaces like SequencedCollection guaranteeing defined collection ordering.Record Patterns: Destructuring tool allowing direct nested access to fields inside records.📅 Java 25 — LTS Release (September 2025)Flexible Constructor Bodies: Allowed independent code execution in constructors before calling super().Implicitly Declared Classes: Streamlined launch structure allowing raw source runs without boilerplate wrapper classes.Structured Concurrency: Standardized concurrent execution trees to treat split tasks as unified scopes.
+
+
+
+
+

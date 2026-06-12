@@ -1,0 +1,51 @@
+# Ch14-01: Helm values — override per environment
+
+replicaCount: 2
+
+image:
+  repository: shopverse/shopverse-app
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: true
+  className: nginx
+  host: shopverse.local
+  tls: false
+
+resources:
+  requests:
+    cpu: "500m"
+    memory: "512Mi"
+  limits:
+    cpu: "2"
+    memory: "1Gi"
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+env:
+  DB_USER: shopverse
+  REDIS_HOST: shopverse-redis
+  KAFKA_BROKERS: shopverse-kafka:9092
+  ES_URI: http://shopverse-elasticsearch:9200
+  MONGO_URI: mongodb://shopverse-mongo:27017/shopverse
+
+secrets:
+  DB_PASS: ""       # set via --set secrets.DB_PASS=...
+  JWT_SECRET: ""    # set via --set secrets.JWT_SECRET=...
+
+postgres:
+  enabled: true
+  image: postgres:16-alpine
+
+redis:
+  enabled: true
+  image: redis:7-alpine

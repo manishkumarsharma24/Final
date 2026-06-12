@@ -1,0 +1,2516 @@
+{
+  "info": {
+    "name": "ShopVerse API",
+    "description": "Complete API collection for ShopVerse Spring Boot application.\n\n## Setup\n1. Set `baseUrl` variable to `http://localhost:8080` (already default)\n2. Run **Login** or **Register** \u2014 token is captured automatically\n3. All protected requests use `{{token}}` automatically\n\n## Seed Data Flow\n1. \ud83d\udd10 Register Admin \u2192 set ROLE in DB (see note)\n2. \ud83d\udd10 Login as Admin\n3. \ud83c\udf31 Run all Seed: Create Product requests\n4. \ud83d\udd10 Register Regular User\n5. \ud83d\udd10 Login as User\n6. \ud83c\udf31 Run Seed: Place Order",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "customerId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "productId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "orderId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "adminSecret",
+      "value": "shopverse-admin-secret",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "\ud83d\udd10 Auth",
+      "item": [
+        {
+          "name": "Register User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const body = pm.response.json();",
+                  "    if (body.data && body.data.token) {",
+                  "        pm.collectionVariables.set('token', body.data.token);",
+                  "        pm.collectionVariables.set('customerId', String(body.data.customerId));",
+                  "        console.log('Token saved. CustomerId:', body.data.customerId);",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Manish\",\n  \"lastName\": \"Sharma\",\n  \"email\": \"manish@shopverse.com\",\n  \"password\": \"Password@123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register"
+              ]
+            },
+            "description": "Register a new customer. Token is auto-saved to {{token}}.\n\n**Note on ADMIN role:** After registering, update the customer's role in the DB:\n```sql\nUPDATE customers SET tier = 'PLATINUM' WHERE email = 'admin@shopverse.com';\n```\nFor admin JWT role, check the AuthController registration logic \u2014 role may need to be set via direct DB or a separate admin bootstrap endpoint."
+          }
+        },
+        {
+          "name": "Register Admin User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const body = pm.response.json();",
+                  "    if (body.data && body.data.token) {",
+                  "        pm.collectionVariables.set('token', body.data.token);",
+                  "        pm.collectionVariables.set('customerId', String(body.data.customerId));",
+                  "        console.log('Admin token saved. CustomerId:', body.data.customerId);",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Admin\",\n  \"lastName\": \"ShopVerse\",\n  \"email\": \"admin@shopverse.com\",\n  \"password\": \"Admin@123\",\n  \"adminSecret\": \"{{adminSecret}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/admin/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "admin",
+                "register"
+              ]
+            },
+            "description": "Register admin user. After this, run the following SQL to grant ADMIN role so that Create Product works:\n\n```sql\n-- Connect to shopverse DB and run:\nUPDATE customers SET tier = 'PLATINUM' WHERE email = 'admin@shopverse.com';\n```\n\nThen check AuthController to confirm how 'role' is embedded in the JWT (look for role assignment in RegisterRequest handler)."
+          }
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const body = pm.response.json();",
+                  "    if (body.data && body.data.token) {",
+                  "        pm.collectionVariables.set('token', body.data.token);",
+                  "        pm.collectionVariables.set('customerId', String(body.data.customerId));",
+                  "        console.log('\u2705 Token saved for:', body.data.email, '| Role:', body.data.role);",
+                  "    }",
+                  "} else {",
+                  "    console.error('Login failed:', pm.response.code, pm.response.text());",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"manish@shopverse.com\",\n  \"password\": \"Password@123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Login as regular USER. Token auto-saved to {{token}}."
+          }
+        },
+        {
+          "name": "Login as Admin",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const body = pm.response.json();",
+                  "    if (body.data && body.data.token) {",
+                  "        pm.collectionVariables.set('token', body.data.token);",
+                  "        console.log('\u2705 Admin token saved for:', body.data.email, '| Role:', body.data.role);",
+                  "    }",
+                  "} else {",
+                  "    console.error('Admin login failed:', pm.response.code, pm.response.text());",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@shopverse.com\",\n  \"password\": \"Admin@123\",\n  \"adminSecret\": \"{{adminSecret}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/admin/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "admin",
+                "login"
+              ]
+            },
+            "description": "Login as ADMIN. Returns token with ADMIN role \u2014 required for POST /api/products and /api/admin/**."
+          }
+        },
+        {
+          "name": "Login as Regular User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const body = pm.response.json();",
+                  "    if (body.data && body.data.token) {",
+                  "        pm.collectionVariables.set('token', body.data.token);",
+                  "        pm.collectionVariables.set('customerId', String(body.data.customerId));",
+                  "        console.log('\u2705 Token saved for:', body.data.email);",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"manish@shopverse.com\",\n  \"password\": \"Password@123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Logout (Clear Token)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "pm.collectionVariables.set('token', '');",
+                  "pm.collectionVariables.set('customerId', '');",
+                  "console.log('\u2705 Token and customerId cleared \u2014 logged out client-side.');",
+                  "// ShopVerse uses stateless JWT \u2014 no server-side session to invalidate.",
+                  "// For production, implement a token denylist (Redis) on the server."
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": ""
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "JWT is stateless \u2014 logout is client-side only. This request clears {{token}} and {{customerId}} variables. No server call is needed."
+          }
+        }
+      ]
+    },
+    {
+      "name": "\ud83d\udce6 Products",
+      "item": [
+        {
+          "name": "List All Products",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/products?keyword=&category=&page=0&size=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products"
+              ],
+              "query": [
+                {
+                  "key": "keyword",
+                  "value": "",
+                  "description": "Search by name (leave empty for all)"
+                },
+                {
+                  "key": "category",
+                  "value": "",
+                  "description": "Filter by category (leave empty for all)"
+                },
+                {
+                  "key": "page",
+                  "value": "0",
+                  "description": "Zero-based page number"
+                },
+                {
+                  "key": "size",
+                  "value": "20",
+                  "description": "Page size"
+                }
+              ]
+            },
+            "description": "Public endpoint \u2014 no auth required. Returns paginated list of all active products."
+          }
+        },
+        {
+          "name": "Search Products by Keyword",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/products?keyword=laptop&page=0&size=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products"
+              ],
+              "query": [
+                {
+                  "key": "keyword",
+                  "value": "laptop"
+                },
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "10"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Filter Products by Category",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/products?category=electronics&page=0&size=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products"
+              ],
+              "query": [
+                {
+                  "key": "category",
+                  "value": "electronics"
+                },
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "20"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Product by ID (Redis Cache)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const body = pm.response.json();",
+                  "    console.log('\u2705 Product fetched:', body.data.name, '| Run again to hit Redis cache');",
+                  "} else if (pm.response.code === 404) {",
+                  "    console.warn('Product not found \u2014 check {{productId}} variable');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/products/{{productId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products",
+                "{{productId}}"
+              ]
+            },
+            "description": "Fetches a single product by ID via @Cacheable.\n\n**Redis flow:**\n- 1st call \u2192 cache MISS \u2192 hits PostgreSQL \u2192 stores in Redis as `products::<id>` with 30 min TTL\n- 2nd call \u2192 cache HIT \u2192 served from Redis, no DB call\n\nVerify in Redis:\n```\ndocker exec -it <redis> redis-cli\nKEYS products::*\nGET products::<id>\nTTL products::<id>\n```"
+          }
+        },
+        {
+          "name": "Get Products by Category (Redis Cache)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const body = pm.response.json();",
+                  "    console.log('\u2705 Products fetched:', body.data.items.length, 'items | Run again to hit Redis cache');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/products?category=electronics&page=0&size=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products"
+              ],
+              "query": [
+                {
+                  "key": "category",
+                  "value": "electronics",
+                  "description": "Change to: electronics, kitchen, clothing, furniture, accessories, lifestyle"
+                },
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "Category filter uses @Cacheable via CachedProductService.findByCategory().\n\n**Redis flow:**\n- 1st call \u2192 cache MISS \u2192 hits PostgreSQL \u2192 stores in Redis as `products::category:electronics` with 30 min TTL\n- 2nd call \u2192 cache HIT \u2192 served from Redis\n\nVerify: `KEYS products::*` in redis-cli"
+          }
+        },
+        {
+          "name": "Update Product (Admin)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const body = pm.response.json();",
+                  "    console.log('\u2705 Product updated:', body.data.name);",
+                  "    console.log('Redis flow:');",
+                  "    console.log('  @CachePut  \u2192 products::' + body.data.id + ' updated');",
+                  "    console.log('  @CacheEvict allEntries \u2192 all page/category caches cleared');",
+                  "    console.log('  Next GET /api/products will be a cache MISS (fresh from DB)');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Updated Product Name\",\n  \"description\": \"Updated description\",\n  \"price\": 149.99,\n  \"currency\": \"USD\",\n  \"category\": \"electronics\",\n  \"stockQuantity\": 75\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/products/{{productId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products",
+                "{{productId}}"
+              ]
+            },
+            "description": "Updates product by ID. Requires ADMIN role.\n\n**Redis flow on update:**\n1. @CachePut \u2192 writes updated product to `products::<id>` (fresh individual cache)\n2. @CacheEvict allEntries \u2192 clears ALL products::* keys (page caches, category caches)\n3. Next GET /api/products \u2192 cache MISS \u2192 hits PostgreSQL \u2192 repopulates cache\n\nThis prevents stale page results after an update."
+          }
+        },
+        {
+          "name": "Delete Product (Admin)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    console.log('\u2705 Product deleted:', pm.request.url.path.slice(-1)[0]);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/products/{{productId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products",
+                "{{productId}}"
+              ]
+            },
+            "description": "Deletes a product by ID. Also removes it from Elasticsearch. Requires ADMIN role. Uses {{productId}} saved from Create Product."
+          }
+        },
+        {
+          "name": "Delete ES Products Index (Admin)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const body = pm.response.json();",
+                  "    if (body.acknowledged) {",
+                  "        console.log('\u2705 ES products index deleted. Now run Reindex All Products.');",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "http://localhost:9200/products",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "9200",
+              "path": [
+                "products"
+              ]
+            },
+            "description": "Deletes the Elasticsearch products index \u2014 use when the mapping is stale (e.g. suggest field type mismatch). Run 'Reindex All Products' immediately after to rebuild the index with correct mappings."
+          }
+        },
+        {
+          "name": "Reindex All Products (Admin)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const body = pm.response.json();",
+                  "    console.log('\u2705 Reindex complete. Indexed:', body.data.indexed);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/products/reindex",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products",
+                "reindex"
+              ]
+            },
+            "description": "One-time bulk reindex \u2014 clears ES index and re-indexes all products from PostgreSQL. Run this once after app startup to sync existing products."
+          }
+        },
+        {
+          "name": "Create Product (Admin)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const body = pm.response.json();",
+                  "    if (body.data && body.data.id) {",
+                  "        pm.collectionVariables.set('productId', String(body.data.id));",
+                  "        console.log('\u2705 Product created, id saved:', body.data.id);",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Sample Product\",\n  \"description\": \"A sample product for testing\",\n  \"price\": 99.99,\n  \"currency\": \"USD\",\n  \"category\": \"electronics\",\n  \"stockQuantity\": 100\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/products",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products"
+              ]
+            },
+            "description": "Requires ADMIN role. Token auto-injected from {{token}}. Product id is saved to {{productId}}."
+          }
+        }
+      ]
+    },
+    {
+      "name": "\ud83d\udc64 Customers",
+      "item": [
+        {
+          "name": "Get Customer by ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/customers/{{customerId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "customers",
+                "{{customerId}}"
+              ]
+            },
+            "description": "Returns customer profile. Uses {{customerId}} captured during login/register."
+          }
+        }
+      ]
+    },
+    {
+      "name": "\ud83d\udccb Orders",
+      "item": [
+        {
+          "name": "Place Order",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const body = pm.response.json();",
+                  "    if (body.data && body.data.id) {",
+                  "        pm.collectionVariables.set('orderId', String(body.data.id));",
+                  "        console.log('\u2705 Order placed, id saved:', body.data.id);",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": {{customerId}},\n  \"street\": \"123 Main Street\",\n  \"city\": \"San Francisco\",\n  \"state\": \"CA\",\n  \"postalCode\": \"94105\",\n  \"country\": \"US\",\n  \"items\": [\n    {\n      \"productId\": {{productId}},\n      \"quantity\": 2\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orders"
+              ]
+            },
+            "description": "Place an order. Uses {{customerId}} and {{productId}} from previous requests.\n\n\u26a0\ufe0f Product must have stockQuantity > 0 \u2014 use Seed Data folder to create products with stock."
+          }
+        }
+      ]
+    },
+    {
+      "name": "\ud83d\udd0d Search (Elasticsearch)",
+      "item": [
+        {
+          "name": "Full-text Search",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/search?q=laptop&page=0&size=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "search"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "laptop",
+                  "description": "Full-text search query (required)"
+                },
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "10"
+                }
+              ]
+            },
+            "description": "Elasticsearch full-text search with fuzzy matching across name, description, category fields. Protected by Resilience4j circuit breaker. Falls back to empty list if ES is down."
+          }
+        },
+        {
+          "name": "Autocomplete",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/search/autocomplete?prefix=lap",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "search",
+                "autocomplete"
+              ],
+              "query": [
+                {
+                  "key": "prefix",
+                  "value": "lap",
+                  "description": "Prefix to autocomplete (required)"
+                }
+              ]
+            },
+            "description": "Returns a list of matching product name suggestions. Used for search-as-you-type."
+          }
+        }
+      ]
+    },
+    {
+      "name": "\u26a1 Reactive (WebFlux)",
+      "item": [
+        {
+          "name": "Get Product (Reactive)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/reactive/products/{{productId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "reactive",
+                "products",
+                "{{productId}}"
+              ]
+            },
+            "description": "WebFlux non-blocking endpoint \u2014 returns Mono<ProductResponse>. Same data as REST but demonstrates reactive programming."
+          }
+        },
+        {
+          "name": "Product Stream (SSE)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "text/event-stream"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/reactive/products/stream?category=electronics",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "reactive",
+                "products",
+                "stream"
+              ],
+              "query": [
+                {
+                  "key": "category",
+                  "value": "electronics",
+                  "description": "Category to stream (default: electronics)"
+                }
+              ]
+            },
+            "description": "Server-Sent Events (SSE) stream. Returns up to 50 products one-by-one at 1-second intervals. Best viewed in a browser or curl:\n\n```\ncurl -N http://localhost:8080/api/reactive/products/stream?category=electronics\n```"
+          }
+        }
+      ]
+    },
+    {
+      "name": "\ud83d\udd34 Redis Inspection",
+      "description": "Verify Redis cache state via the ShopVerse API. Run these before and after product operations to observe cache MISS \u2192 HIT behaviour.\n\nFor direct Redis inspection use redis-cli:\n  docker exec -it <redis-container> redis-cli\n  KEYS *\n  GET products::42\n  TTL products::42",
+      "item": [
+        {
+          "name": "Step 1 \u2014 Create Product (populates Redis via @CachePut)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const body = pm.response.json();",
+                  "    pm.collectionVariables.set('productId', String(body.data.id));",
+                  "    console.log('\u2705 Product created, id:', body.data.id);",
+                  "    console.log('\ud83d\udc49 Redis key written: products::' + body.data.id + ' (TTL 30 min)');",
+                  "    console.log('\ud83d\udc49 Now run Step 2 \u2014 first call will be a cache MISS');",
+                  "    console.log('\ud83d\udc49 Then run Step 2 again \u2014 second call will be a cache HIT');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Redis Test Product\",\n  \"description\": \"Created to demonstrate Redis @CachePut\",\n  \"price\": 49.99,\n  \"currency\": \"USD\",\n  \"category\": \"electronics\",\n  \"stockQuantity\": 10\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/products",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products"
+              ]
+            },
+            "description": "Creates product via CreateProductUseCase \u2192 cachedProductService.save() \u2192 @CachePut\n\nWhat happens in Redis:\n  SET products::<id> <json> EX 1800\n\nVerify immediately after:\n  redis-cli> KEYS products::*\n  redis-cli> GET products::<id>"
+          }
+        },
+        {
+          "name": "Step 2 \u2014 Get Product by ID (1st call = MISS, 2nd call = HIT)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const body = pm.response.json();",
+                  "    console.log('\u2705 Product:', body.data.name);",
+                  "    console.log('\ud83d\udc49 1st run: cache MISS \u2192 hit PostgreSQL \u2192 stored in Redis');",
+                  "    console.log('\ud83d\udc49 2nd run: cache HIT \u2192 served from Redis, no DB call');",
+                  "    console.log('Check redis-cli: GET products::' + pm.collectionVariables.get('productId'));",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/products/{{productId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products",
+                "{{productId}}"
+              ]
+            },
+            "description": "GET by ID \u2192 CachedProductService.findById() \u2192 @Cacheable\n\n1st call:\n  Redis GET products::<id> \u2192 null (MISS)\n  PostgreSQL SELECT WHERE id = ?\n  Redis SET products::<id> <json> EX 1800\n\n2nd call:\n  Redis GET products::<id> \u2192 <json> (HIT)\n  Returns immediately, PostgreSQL never called\n\nVerify TTL counting down:\n  redis-cli> TTL products::<id>"
+          }
+        },
+        {
+          "name": "Step 3 \u2014 Get by Category (1st call = MISS, 2nd call = HIT)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const body = pm.response.json();",
+                  "    console.log('\u2705 Products in electronics:', body.data.items.length);",
+                  "    console.log('\ud83d\udc49 Run again \u2014 2nd call served from Redis');",
+                  "    console.log('Check redis-cli: GET \"products::category:electronics\"');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/products?category=electronics",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products"
+              ],
+              "query": [
+                {
+                  "key": "category",
+                  "value": "electronics"
+                }
+              ]
+            },
+            "description": "Category filter \u2192 CachedProductService.findByCategory() \u2192 @Cacheable\n\nRedis key: products::category:electronics\nTTL: 30 min\n\nVerify: redis-cli> GET \"products::category:electronics\""
+          }
+        },
+        {
+          "name": "Step 4 \u2014 Delete Product (evicts Redis cache via @CacheEvict)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    console.log('\u2705 Product deleted');",
+                  "    console.log('\ud83d\udc49 Redis keys evicted:');",
+                  "    console.log('   products::' + pm.collectionVariables.get('productId') + ' \u2192 deleted');",
+                  "    console.log('   products::category:* \u2192 all category caches cleared');",
+                  "    console.log('\ud83d\udc49 Now run Step 2 again \u2014 will be a cache MISS (product gone)');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/products/{{productId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products",
+                "{{productId}}"
+              ]
+            },
+            "description": "Delete \u2192 DeleteProductUseCase \u2192 cachedProductService.evict() \u2192 @CacheEvict\n\nWhat happens in Redis:\n  DEL products::<id>\n  DEL products::category:*  (all entries)\n\nVerify after delete:\n  redis-cli> KEYS products::*\n  Should no longer see the product key or category cache"
+          }
+        },
+        {
+          "name": "Step 5 \u2014 Verify Cache Eviction (expect 404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 404) {",
+                  "    console.log('\u2705 Correct \u2014 product was deleted and cache was evicted');",
+                  "    console.log('   Redis key products::' + pm.collectionVariables.get('productId') + ' no longer exists');",
+                  "} else if (pm.response.code === 200) {",
+                  "    console.warn('\u26a0\ufe0f Cache eviction may not have worked \u2014 product still returned');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/products/{{productId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products",
+                "{{productId}}"
+              ]
+            },
+            "description": "After Step 4 delete, this should return 404. Confirms cache eviction worked \u2014 the deleted product is not served stale from Redis."
+          }
+        }
+      ]
+    },
+    {
+      "name": "\ud83d\udd0e Elasticsearch Direct",
+      "description": "Direct queries to Elasticsearch at localhost:9200 \u2014 no auth required. Use these to inspect what is indexed in ES independently of the ShopVerse API.",
+      "item": [
+        {
+          "name": "ES Health Check",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "http://localhost:9200",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "9200",
+              "path": [
+                ""
+              ]
+            },
+            "description": "Check if Elasticsearch is running. Returns cluster name, version, and status."
+          }
+        },
+        {
+          "name": "ES List All Indices",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "http://localhost:9200/_cat/indices?v",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "9200",
+              "path": [
+                "_cat",
+                "indices"
+              ],
+              "query": [
+                {
+                  "key": "v",
+                  "value": null,
+                  "description": "Verbose \u2014 shows column headers"
+                }
+              ]
+            },
+            "description": "Lists all ES indices with document count, size, and health status. Should show 'products' index after app startup."
+          }
+        },
+        {
+          "name": "ES Get All Products",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "http://localhost:9200/products/_search",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "9200",
+              "path": [
+                "products",
+                "_search"
+              ]
+            },
+            "description": "Returns all documents in the products index (up to 10 by default). Shows raw ES document structure including _id, _source, and metadata."
+          }
+        },
+        {
+          "name": "ES Count Total Products",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "http://localhost:9200/products/_count",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "9200",
+              "path": [
+                "products",
+                "_count"
+              ]
+            },
+            "description": "Returns the total number of documents indexed in ES. Compare with PostgreSQL count to verify sync."
+          }
+        },
+        {
+          "name": "ES Get Product by ID",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "http://localhost:9200/products/_doc/{{productId}}",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "9200",
+              "path": [
+                "products",
+                "_doc",
+                "{{productId}}"
+              ]
+            },
+            "description": "Fetch a specific product document from ES by ID. Uses {{productId}} saved from Create Product. Returns 404 if not yet indexed."
+          }
+        },
+        {
+          "name": "ES Search by Name",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": {\n    \"match\": {\n      \"name\": \"MacBook\"\n    }\n  }\n}"
+            },
+            "url": {
+              "raw": "http://localhost:9200/products/_search",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "9200",
+              "path": [
+                "products",
+                "_search"
+              ]
+            },
+            "description": "Full-text match query on product name. Change 'MacBook' to any keyword. Returns score-ranked results."
+          }
+        },
+        {
+          "name": "ES Search by Category",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": {\n    \"term\": {\n      \"category\": \"electronics\"\n    }\n  }\n}"
+            },
+            "url": {
+              "raw": "http://localhost:9200/products/_search",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "9200",
+              "path": [
+                "products",
+                "_search"
+              ]
+            },
+            "description": "Exact term match on category field. Use 'term' (not 'match') for exact keyword fields. Change 'electronics' to any category."
+          }
+        },
+        {
+          "name": "ES Full-text Search (Multi-field)",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": {\n    \"multi_match\": {\n      \"query\": \"laptop developer\",\n      \"fields\": [\"name\", \"description\", \"category\"],\n      \"fuzziness\": \"AUTO\"\n    }\n  }\n}"
+            },
+            "url": {
+              "raw": "http://localhost:9200/products/_search",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "9200",
+              "path": [
+                "products",
+                "_search"
+              ]
+            },
+            "description": "Searches across name, description, and category fields simultaneously with fuzzy matching. This is what ShopVerse's /api/search endpoint uses internally."
+          }
+        },
+        {
+          "name": "ES Filter by Price Range",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": {\n    \"range\": {\n      \"price\": {\n        \"gte\": 100,\n        \"lte\": 500\n      }\n    }\n  }\n}"
+            },
+            "url": {
+              "raw": "http://localhost:9200/products/_search",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "9200",
+              "path": [
+                "products",
+                "_search"
+              ]
+            },
+            "description": "Filter products by price range. Change gte (greater than or equal) and lte (less than or equal) values as needed."
+          }
+        },
+        {
+          "name": "ES Get Index Mapping",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "http://localhost:9200/products/_mapping",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "9200",
+              "path": [
+                "products",
+                "_mapping"
+              ]
+            },
+            "description": "Shows the field mappings for the products index \u2014 field types, analyzers, whether fields are indexed. Useful for debugging search issues."
+          }
+        },
+        {
+          "name": "ES Cluster Health",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "http://localhost:9200/_cluster/health",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "9200",
+              "path": [
+                "_cluster",
+                "health"
+              ]
+            },
+            "description": "Returns cluster health: green (all good), yellow (replicas unassigned \u2014 normal for single-node dev), red (data missing). Single-node Docker setup will always be yellow."
+          }
+        }
+      ]
+    },
+    {
+      "name": "\u2b50 Reviews (MongoDB)",
+      "description": "Product reviews stored in MongoDB.\n\n**Flow:**\n1. Login as User (Auth \u2192 Login)\n2. Create a product (Seed Data \u2192 Create Product \u2014 Laptop)\n3. Submit Review \u2014 writes to MongoDB 'reviews' collection\n4. Get Reviews \u2014 reads from MongoDB\n5. Get Rating Stats \u2014 runs MongoDB aggregation pipeline\n\nVerify in MongoDB:\n  docker exec -it <mongo-container> mongosh shopverse\n  db.reviews.find().pretty()\n  db.reviews.countDocuments()",
+      "item": [
+        {
+          "name": "Submit Review (authenticated)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const body = pm.response.json();",
+                  "    console.log('\u2705 Review saved to MongoDB, id:', body.data.id);",
+                  "    console.log('   productId:', body.data.productId, '| rating:', body.data.rating);",
+                  "} else {",
+                  "    console.error('Submit failed:', pm.response.code, JSON.stringify(pm.response.json()));",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": {{customerId}},\n  \"rating\": 5,\n  \"title\": \"Absolutely love this product!\",\n  \"body\": \"I have been using this for a month and it exceeded all my expectations. Build quality is excellent and performance is top-notch. Highly recommended for anyone looking for reliability.\",\n  \"tags\": [\"excellent\", \"value-for-money\", \"highly-recommended\"],\n  \"verified\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/products/{{productId}}/reviews",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products",
+                "{{productId}}",
+                "reviews"
+              ]
+            },
+            "description": "Submits a review for the product in {{productId}}.\n\nStored in MongoDB 'reviews' collection as a document:\n```json\n{\n  \"_id\": ObjectId(\"...\"),\n  \"product_id\": 1,\n  \"customer_id\": 1,\n  \"rating\": 5,\n  \"title\": \"...\",\n  \"body\": \"...\",\n  \"tags\": [...],\n  \"helpful_votes\": 0,\n  \"verified\": true,\n  \"created_at\": ISODate(\"...\")\n}\n```\n\nRequires authentication (Bearer token)."
+          }
+        },
+        {
+          "name": "Submit Second Review (3 stars)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const body = pm.response.json();",
+                  "    console.log('\u2705 Second review saved, id:', body.data.id, '| rating:', body.data.rating);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": {{customerId}},\n  \"rating\": 3,\n  \"title\": \"Good but has some drawbacks\",\n  \"body\": \"The product works as advertised but the setup process was a bit confusing. Customer support was helpful though. Would be better with clearer documentation.\",\n  \"tags\": [\"average\", \"good-support\"],\n  \"verified\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/products/{{productId}}/reviews",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products",
+                "{{productId}}",
+                "reviews"
+              ]
+            },
+            "description": "Submits a second review with 3-star rating. Run this after the 5-star review. The stats endpoint should then show average = 4.0 with count = 2."
+          }
+        },
+        {
+          "name": "Submit Third Review (4 stars)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const body = pm.response.json();",
+                  "    console.log('\u2705 Third review saved, id:', body.data.id, '| rating:', body.data.rating);",
+                  "    console.log('Now run Get Rating Stats to see avg across 3 reviews');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": {{customerId}},\n  \"rating\": 4,\n  \"title\": \"Solid product, worth the price\",\n  \"body\": \"Great build quality and fast delivery. The features are exactly what I needed. Minor complaint about the packaging but nothing that affects the product itself.\",\n  \"tags\": [\"solid\", \"fast-delivery\", \"worth-it\"],\n  \"verified\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/products/{{productId}}/reviews",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products",
+                "{{productId}}",
+                "reviews"
+              ]
+            },
+            "description": "Submits a third review with 4-star rating. After 3 reviews (5+3+4), the stats endpoint should show avg = 4.0, count = 3."
+          }
+        },
+        {
+          "name": "Get All Reviews for Product (public)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const body = pm.response.json();",
+                  "    console.log('\u2705 Reviews fetched from MongoDB:', body.data.length, 'total');",
+                  "    body.data.forEach((r, i) => {",
+                  "        console.log('  [' + i + '] rating:', r.rating, '| title:', r.title);",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/products/{{productId}}/reviews",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products",
+                "{{productId}}",
+                "reviews"
+              ]
+            },
+            "description": "Returns all reviews for the product, newest first. No auth required.\n\nCalls MongoDB: db.reviews.find({ product_id: <id> }).sort({ created_at: -1 })"
+          }
+        },
+        {
+          "name": "Get Reviews with Min Rating Filter (\u2265 4 stars)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const body = pm.response.json();",
+                  "    console.log('\u2705 Reviews with rating >= 4:', body.data.length);",
+                  "    body.data.forEach(r => console.log('  rating:', r.rating, '| title:', r.title));",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/products/{{productId}}/reviews?minRating=4",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products",
+                "{{productId}}",
+                "reviews"
+              ],
+              "query": [
+                {
+                  "key": "minRating",
+                  "value": "4",
+                  "description": "Minimum rating filter (1-5). Only returns reviews with rating >= this value."
+                }
+              ]
+            },
+            "description": "Returns only reviews with rating >= minRating.\n\nMongoDB query: db.reviews.find({ product_id: <id>, rating: { $gte: 4 } })\n\nChange minRating to 1, 2, 3, 4, or 5 to filter accordingly."
+          }
+        },
+        {
+          "name": "Get Rating Stats (MongoDB Aggregation)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const body = pm.response.json();",
+                  "    const stats = body.data;",
+                  "    console.log('\u2705 MongoDB aggregation result:');",
+                  "    console.log('   productId:', stats.productId);",
+                  "    console.log('   averageRating:', stats.averageRating);",
+                  "    console.log('   reviewCount:', stats.reviewCount);",
+                  "    if (stats.reviewCount === 0) {",
+                  "        console.warn('\u26a0\ufe0f No reviews yet \u2014 submit some reviews first');",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/products/{{productId}}/reviews/stats",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products",
+                "{{productId}}",
+                "reviews",
+                "stats"
+              ]
+            },
+            "description": "Returns average rating and total review count for the product.\n\nRuns a MongoDB aggregation pipeline:\n```json\n[\n  { $match: { product_id: <id> } },\n  { $group: { _id: '$product_id', avg: { $avg: '$rating' }, count: { $sum: 1 } } }\n]\n```\n\nExpected after 3 reviews (5+3+4): averageRating=4.0, reviewCount=3"
+          }
+        },
+        {
+          "name": "Get Reviews \u2014 Product Not Found (expect 404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 404) {",
+                  "    console.log('\u2705 Correct \u2014 product 99999 does not exist');",
+                  "} else {",
+                  "    console.warn('Unexpected response:', pm.response.code);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/products/99999/reviews",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products",
+                "99999",
+                "reviews"
+              ]
+            },
+            "description": "Tests error handling \u2014 product 99999 does not exist. GET reviews for a non-existent product returns an empty list (MongoDB has no record), which is valid. However, POST /submit validates product existence in PostgreSQL and returns 404."
+          }
+        },
+        {
+          "name": "Submit Review \u2014 Invalid Rating (expect 400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 400) {",
+                  "    console.log('\u2705 Correct \u2014 validation rejected rating=6');",
+                  "} else {",
+                  "    console.warn('Expected 400 but got:', pm.response.code);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": {{customerId}},\n  \"rating\": 6,\n  \"title\": \"This should fail\",\n  \"body\": \"Rating 6 is out of range \u2014 must be 1 to 5.\",\n  \"tags\": [],\n  \"verified\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/products/{{productId}}/reviews",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products",
+                "{{productId}}",
+                "reviews"
+              ]
+            },
+            "description": "Tests input validation. Rating must be 1-5 (@Max(5) on ReviewRequest). Sending rating=6 should return HTTP 400 Bad Request."
+          }
+        }
+      ]
+    },
+    {
+      "name": "\ud83d\uddc3\ufe0f Order Activity (Cassandra)",
+      "description": "Order activity events stored in Cassandra.\n\nEach time an order is placed, a ORDER_PLACED event is automatically written to the Cassandra 'order_activity' table.\n\n**Flow:**\n1. Login as User \u2192 place an order \u2192 activity is logged automatically\n2. GET activity to read events from Cassandra\n\nVerify in Cassandra:\n  docker exec -it <cassandra-container> cqlsh\n  USE shopverse;\n  SELECT * FROM order_activity;",
+      "item": [
+        {
+          "name": "Place Order (triggers Cassandra activity log)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const body = pm.response.json();",
+                  "    pm.collectionVariables.set('orderId', String(body.data.id));",
+                  "    console.log('\u2705 Order placed, id:', body.data.id);",
+                  "    console.log('\ud83d\udc49 Cassandra: ORDER_PLACED event written to order_activity table');",
+                  "    console.log('\ud83d\udc49 Now run Get Order Activity to read from Cassandra');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": {{customerId}},\n  \"street\": \"123 Main Street\",\n  \"city\": \"San Francisco\",\n  \"state\": \"CA\",\n  \"postalCode\": \"94105\",\n  \"country\": \"US\",\n  \"items\": [\n    {\n      \"productId\": {{productId}},\n      \"quantity\": 1\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orders"
+              ]
+            },
+            "description": "Places an order. After the PostgreSQL commit, PlaceOrderUseCase writes an ORDER_PLACED event to Cassandra:\n\n```\nINSERT INTO order_activity (customer_id, event_time, event_id, order_id, event_type, details)\nVALUES ({{customerId}}, now(), uuid(), {{orderId}}, 'ORDER_PLACED', 'Order #X placed...')\n```\n\nThe Cassandra write is wrapped in try-catch \u2014 if Cassandra is down the order still succeeds."
+          }
+        },
+        {
+          "name": "Place Second Order (builds up activity history)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const body = pm.response.json();",
+                  "    console.log('\u2705 Second order placed, id:', body.data.id);",
+                  "    console.log('\ud83d\udc49 Second ORDER_PLACED event written to Cassandra');",
+                  "    console.log('\ud83d\udc49 Run Get Order Activity \u2014 should now show 2 events');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": {{customerId}},\n  \"street\": \"456 Oak Avenue\",\n  \"city\": \"New York\",\n  \"state\": \"NY\",\n  \"postalCode\": \"10001\",\n  \"country\": \"US\",\n  \"items\": [\n    {\n      \"productId\": {{productId}},\n      \"quantity\": 2\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orders"
+              ]
+            },
+            "description": "Place a second order to build activity history. After this, Get Order Activity should return 2 events for the customer, newest first."
+          }
+        },
+        {
+          "name": "Get All Order Activity (reads from Cassandra)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const body = pm.response.json();",
+                  "    console.log('\u2705 Activity events from Cassandra:', body.data.length);",
+                  "    body.data.forEach((e, i) => {",
+                  "        console.log('  [' + i + '] eventType:', e.eventType,",
+                  "            '| orderId:', e.orderId,",
+                  "            '| time:', e.eventTime);",
+                  "    });",
+                  "    if (body.data.length === 0) {",
+                  "        console.warn('\u26a0\ufe0f No events found \u2014 place an order first');",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/orders/activity/{{customerId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "activity",
+                "{{customerId}}"
+              ]
+            },
+            "description": "Reads all order activity events for the customer from Cassandra, newest first.\n\nCassandra query: SELECT * FROM order_activity WHERE customer_id = {{customerId}} ORDER BY event_time DESC\n\nPartition key is customer_id \u2014 all events for a customer are on one Cassandra node. Very fast reads.\n\nExpected after 2 orders: 2 ORDER_PLACED events, newest first."
+          }
+        },
+        {
+          "name": "Get Recent Activity (since timestamp)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const body = pm.response.json();",
+                  "    console.log('\u2705 Recent activity events (last hour):', body.data.length);",
+                  "    body.data.forEach(e => {",
+                  "        console.log('  eventType:', e.eventType, '| orderId:', e.orderId);",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/orders/activity/{{customerId}}?since={{$isoTimestamp}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "activity",
+                "{{customerId}}"
+              ],
+              "query": [
+                {
+                  "key": "since",
+                  "value": "2026-01-01T00:00:00Z",
+                  "description": "ISO-8601 timestamp. Returns last 50 events after this time. Change to 1 hour ago to see recent orders only."
+                }
+              ]
+            },
+            "description": "Returns last 50 activity events after the given timestamp.\n\nCassandra CQL: SELECT * FROM order_activity WHERE customer_id = ? AND event_time > ? LIMIT 50\n\nChange the since parameter to filter by time window. Example values:\n- 2026-01-01T00:00:00Z \u2014 all events this year\n- 2026-06-11T00:00:00Z \u2014 all events today"
+          }
+        },
+        {
+          "name": "Get Activity \u2014 No Orders Yet (expect empty list)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const body = pm.response.json();",
+                  "    if (body.data.length === 0) {",
+                  "        console.log('\u2705 Empty list returned \u2014 customer 99999 has no activity');",
+                  "    } else {",
+                  "        console.warn('Unexpected events:', body.data.length);",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/orders/activity/99999",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "activity",
+                "99999"
+              ]
+            },
+            "description": "Customer 99999 has no orders. Cassandra returns an empty result set \u2014 not a 404. This confirms the query runs successfully against Cassandra even with no matching rows."
+          }
+        },
+        {
+          "name": "\u2460 Confirm Order (PENDING \u2192 CONFIRMED)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/orders/{{orderId}}/confirm",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "{{orderId}}",
+                "confirm"
+              ]
+            },
+            "description": "Transitions order from PENDING to CONFIRMED. Logs ORDER_CONFIRMED event to Cassandra. Admin only."
+          },
+          "response": []
+        },
+        {
+          "name": "\u2461 Process Order (CONFIRMED \u2192 PROCESSING)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/orders/{{orderId}}/process",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "{{orderId}}",
+                "process"
+              ]
+            },
+            "description": "Transitions order from CONFIRMED to PROCESSING. Logs ORDER_PROCESSING event to Cassandra. Admin only."
+          },
+          "response": []
+        },
+        {
+          "name": "\u2462 Ship Order (PROCESSING \u2192 SHIPPED)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/orders/{{orderId}}/ship",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "{{orderId}}",
+                "ship"
+              ]
+            },
+            "description": "Transitions order from PROCESSING to SHIPPED. Logs ORDER_SHIPPED event with tracking number to Cassandra. Admin only.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"trackingNumber\": \"TRK-{{$randomAlphaNumeric}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "\u2463 Deliver Order (SHIPPED \u2192 DELIVERED)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/orders/{{orderId}}/deliver",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "{{orderId}}",
+                "deliver"
+              ]
+            },
+            "description": "Transitions order from SHIPPED to DELIVERED. Logs ORDER_DELIVERED event to Cassandra. Admin only."
+          },
+          "response": []
+        },
+        {
+          "name": "\u2464 Cancel Order (PENDING/CONFIRMED/PROCESSING \u2192 CANCELLED)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/orders/{{orderId}}/cancel",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "{{orderId}}",
+                "cancel"
+              ]
+            },
+            "description": "Cancels an order. Any authenticated user. Logs ORDER_CANCELLED to Cassandra. Returns 422 if order is already SHIPPED or DELIVERED."
+          },
+          "response": []
+        },
+        {
+          "name": "\u2465 [Error] Invalid Transition \u2014 DELIVERED \u2192 CONFIRM",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/orders/{{orderId}}/confirm",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "{{orderId}}",
+                "confirm"
+              ]
+            },
+            "description": "Expects HTTP 422 Unprocessable Entity \u2014 order is already DELIVERED, cannot go back to CONFIRMED."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "\ud83c\udf31 Seed Data",
+      "description": "Run these in order to populate the database for testing.\n\n**Order:**\n1. Login as Admin first (Auth \u2192 Login)\n2. Run all Create Product requests\n3. Login as Regular User\n4. Run Place Sample Order",
+      "item": [
+        {
+          "name": "Seed: Create Product \u2014 Laptop",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const body = pm.response.json();",
+                  "    if (body.data) {",
+                  "        pm.collectionVariables.set('productId', String(body.data.id));",
+                  "        console.log('Created:', body.data.name, 'id:', body.data.id);",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"MacBook Pro 16-inch\",\n  \"description\": \"Apple M3 Pro chip, 18GB RAM, 512GB SSD \u2014 professional laptop for developers\",\n  \"price\": 2499.00,\n  \"currency\": \"USD\",\n  \"category\": \"electronics\",\n  \"stockQuantity\": 50\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/products",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Seed: Create Product \u2014 Wireless Headphones",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Sony WH-1000XM5 Headphones\",\n  \"description\": \"Industry-leading noise cancelling wireless headphones with 30-hour battery\",\n  \"price\": 349.99,\n  \"currency\": \"USD\",\n  \"category\": \"electronics\",\n  \"stockQuantity\": 120\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/products",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Seed: Create Product \u2014 Running Shoes",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Nike Air Zoom Pegasus 40\",\n  \"description\": \"Versatile everyday running shoe with responsive cushioning\",\n  \"price\": 130.00,\n  \"currency\": \"USD\",\n  \"category\": \"clothing\",\n  \"stockQuantity\": 200\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/products",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Seed: Create Product \u2014 Coffee Maker",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Breville Barista Express\",\n  \"description\": \"Espresso machine with integrated grinder \u2014 cafe quality at home\",\n  \"price\": 699.95,\n  \"currency\": \"USD\",\n  \"category\": \"kitchen\",\n  \"stockQuantity\": 30\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/products",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Seed: Create Product \u2014 Standing Desk",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Flexispot E7 Pro Standing Desk\",\n  \"description\": \"Electric height-adjustable standing desk, 180cm x 80cm, dual motor\",\n  \"price\": 549.00,\n  \"currency\": \"USD\",\n  \"category\": \"furniture\",\n  \"stockQuantity\": 25\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/products",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Seed: Create Product \u2014 Mechanical Keyboard",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Keychron Q1 Pro Mechanical Keyboard\",\n  \"description\": \"75% layout wireless QMK/VIA programmable keyboard with aluminium frame\",\n  \"price\": 199.00,\n  \"currency\": \"USD\",\n  \"category\": \"accessories\",\n  \"stockQuantity\": 80\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/products",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Seed: Create Product \u2014 Yoga Mat",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Manduka PRO Yoga Mat\",\n  \"description\": \"6mm thick professional yoga mat, lifetime guarantee, non-slip surface\",\n  \"price\": 120.00,\n  \"currency\": \"USD\",\n  \"category\": \"lifestyle\",\n  \"stockQuantity\": 150\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/products",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Seed: Create Product \u2014 Monitor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"LG 27UK850-W 4K Monitor\",\n  \"description\": \"27-inch 4K UHD IPS display with USB-C, HDR10 \u2014 perfect for developers\",\n  \"price\": 449.00,\n  \"currency\": \"USD\",\n  \"category\": \"electronics\",\n  \"stockQuantity\": 40\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/products",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Seed: Register User 1",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const body = pm.response.json();",
+                  "    if (body.data && body.data.token) {",
+                  "        pm.collectionVariables.set('token', body.data.token);",
+                  "        pm.collectionVariables.set('customerId', String(body.data.customerId));",
+                  "        console.log('User 1 registered, customerId:', body.data.customerId);",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Alice\",\n  \"lastName\": \"Johnson\",\n  \"email\": \"alice@example.com\",\n  \"password\": \"Password@123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Seed: Register User 2",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const body = pm.response.json();",
+                  "    if (body.data && body.data.token) {",
+                  "        pm.collectionVariables.set('token', body.data.token);",
+                  "        pm.collectionVariables.set('customerId', String(body.data.customerId));",
+                  "        console.log('User 2 registered, customerId:', body.data.customerId);",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Bob\",\n  \"lastName\": \"Smith\",\n  \"email\": \"bob@example.com\",\n  \"password\": \"Password@123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Seed: Place Sample Order",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const body = pm.response.json();",
+                  "    if (body.data) {",
+                  "        pm.collectionVariables.set('orderId', String(body.data.id));",
+                  "        console.log('\u2705 Order placed! id:', body.data.id, 'status:', body.data.status);",
+                  "    }",
+                  "} else {",
+                  "    console.error('Order failed:', pm.response.json());",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": {{customerId}},\n  \"street\": \"456 Oak Avenue\",\n  \"city\": \"New York\",\n  \"state\": \"NY\",\n  \"postalCode\": \"10001\",\n  \"country\": \"US\",\n  \"items\": [\n    {\n      \"productId\": {{productId}},\n      \"quantity\": 1\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orders"
+              ]
+            },
+            "description": "Uses {{customerId}} and {{productId}} from previous requests. Run after creating products."
+          }
+        }
+      ]
+    }
+  ]
+}

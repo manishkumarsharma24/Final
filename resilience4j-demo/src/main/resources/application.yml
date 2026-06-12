@@ -1,0 +1,105 @@
+server:
+  port: 8080
+
+# ============================================================
+# RESILIENCE4J CONFIGURATION
+# All 5 patterns configured here — Spring Boot auto-wires them
+# ============================================================
+resilience4j:
+
+  # -------------------------------------------------------
+  # LAYER 1: RATE LIMITER
+  # Controls how many requests per second are allowed in
+  # Sits outermost — cheapest check, stops flood early
+  # -------------------------------------------------------
+  ratelimiter:
+    instances:
+      paymentService:
+        limit-for-period: 100           # 100 requests allowed
+        limit-refresh-period: 1s        # per 1 second window
+        timeout-duration: 0             # don't queue — reject immediately
+        # Effect: 101st request in a second → RequestNotPermitted exception
+
+  # -------------------------------------------------------
+  # LAYER 2: CIRCUIT BREAKER
+  # Monitors failure rate — opens circuit if too many failures
+  # Prevents hammering a broken downstream service
+  # -------------------------------------------------------
+  circuitbreaker:
+    instances:
+      paymentService:
+        sliding-window-type: COUNT_BASED     # count last N calls (not time-based)
+        sliding-window-size: 10              # measure last 10 calls
+        failure-rate-threshold: 50           # OPEN if 50%+ fail (5 out of 10)
+        wait-duration-in-open-state: 30s     # stay OPEN 30s before trying again
+        permitted-number-of-calls-in-half-open-state: 3  # test with 3 calls
+        automatic-transition-from-open-to-half-open-enabled: true
+        # States: CLOSED (normal) → OPEN (blocking) → HALF_OPEN (testing)
+        register-health-indicator: true      # visible in /actuator/health
+
+  # -------------------------------------------------------
+  # LAYER 3: RETRY
+  # Retries failed calls — handles transient failures
+  # Inside Circuit Breaker so all attempts count toward failure rate
+  # -------------------------------------------------------
+  retry:
+    instances:
+      paymentService:
+        max-attempts: 3                  # try up to 3 times
+        wait-duration: 500ms             # wait 500ms between attempts
+        retry-exceptions:                # only retry on these exceptions
+          - java.util.concurrent.TimeoutException
+          - java.net.ConnectException
+          - org.springframework.web.client.ResourceAccessException
+        ignore-exceptions:               # never retry on these
+          - com.example.resilience4j.model.PaymentDeclinedException
+        # Effect: timeout → wait 500ms → retry → wait 500ms → retry → give up
+
+  # -------------------------------------------------------
+  # LAYER 4: BULKHEAD
+  # Limits concurrent calls to Payment Service
+  # Prevents one slow service from consuming all threads
+  # -------------------------------------------------------
+  bulkhead:
+    instances:
+      paymentService:
+        max-concurrent-calls: 10         # max 10 simultaneous calls
+        max-wait-duration: 100ms         # wait 100ms for a slot before rejecting
+        # Effect: 11th concurrent call waits 100ms, then BulkheadFullException
+
+  # -------------------------------------------------------
+  # LAYER 5: TIME LIMITER (innermost)
+  # Cancels calls that take too long
+  # Closest to actual HTTP call — frees threads quickly
+  # -------------------------------------------------------
+  timelimiter:
+    instances:
+      paymentService:
+        timeout-duration: 2s             # 2 second max wait
+        cancel-running-future: true      # actually cancel the HTTP call
+        # Effect: Payment Service takes > 2s → TimeoutException
+
+# ============================================================
+# SPRING ACTUATOR — Monitor circuit breaker state via HTTP
+# ============================================================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,circuitbreakers,ratelimiters,retries,bulkheads,prometheus
+  endpoint:
+    health:
+      show-details: always
+  health:
+    circuitbreakers:
+      enabled: true
+    ratelimiters:
+      enabled: true
+
+# ============================================================
+# LOGGING — See exactly what Resilience4j is doing
+# ============================================================
+logging:
+  level:
+    com.example.resilience4j: DEBUG
+    io.github.resilience4j: DEBUG

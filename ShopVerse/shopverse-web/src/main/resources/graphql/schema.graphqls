@@ -1,0 +1,62 @@
+# Ch12-05: GraphQL schema — product queries
+
+type Query {
+    products(category: String, keyword: String, page: Int, size: Int): [Product!]!
+    productRecommendations(productId: ID!): [RecommendedProduct!]!
+}
+
+type Product {
+    id: ID!
+    name: String!
+    description: String
+    price: Float!
+    currency: String!
+    category: String
+    stockQuantity: Int!
+    active: Boolean!
+}
+
+type RecommendedProduct {
+    productId: ID
+    name: String
+    category: String
+    avgRating: Float
+}
+
+type Order {
+    id: ID!
+    customerId: ID!
+    status: String!
+    total: Float!
+    items: [OrderItem!]!
+}
+
+type OrderItem {
+    productId: ID!
+    productName: String!
+    quantity: Int!
+    unitPrice: Float!
+}
+
+input ProductInput {
+    name: String!
+    description: String
+    price: Float!
+    currency: String!
+    category: String
+}
+
+input OrderInput {
+    customerId: ID!
+    street: String!
+    city: String!
+    state: String
+    postalCode: String!
+    country: String!
+    items: [OrderItemInput!]!
+}
+
+input OrderItemInput {
+    productId: ID!
+    quantity: Int!
+}

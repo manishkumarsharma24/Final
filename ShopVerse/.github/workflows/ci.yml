@@ -1,0 +1,122 @@
+# Ch16-01: CI pipeline — build, test, Docker push, Helm deploy
+name: ShopVerse CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/shopverse-app
+  JAVA_VERSION: "21"
+
+jobs:
+
+  # ─── Build & Test ──────────────────────────────────────────────────────────
+  build-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: shopverse_test
+          POSTGRES_USER: shopverse
+          POSTGRES_PASSWORD: shopverse
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Build with Maven
+        run: mvn -B package -DskipTests
+
+      - name: Run unit tests
+        run: mvn -B test
+
+      - name: Run integration tests
+        run: mvn -B verify -Pintegration-tests
+        env:
+          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/shopverse_test
+
+      - name: Upload JaCoCo coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: shopverse-web/target/site/jacoco/
+
+      # Ch16-04: SonarQube quality gate
+      - name: SonarQube Scan
+        if: github.ref == 'refs/heads/main'
+        run: mvn sonar:sonar -Dsonar.host.url=${{ secrets.SONAR_URL }} -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+
+  # ─── Docker Build & Push ───────────────────────────────────────────────────
+  docker:
+    name: Docker Build & Push
+    needs: build-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ─── Deploy to Kubernetes ─────────────────────────────────────────────────
+  deploy:
+    name: Deploy via Helm
+    needs: docker
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: v3.14.0
+
+      - name: Deploy with Helm
+        run: |
+          helm upgrade --install shopverse ./k8s/helm/shopverse \
+            --namespace shopverse --create-namespace \
+            --set image.tag=${{ github.sha }} \
+            --set secrets.DB_PASS=${{ secrets.DB_PASS }} \
+            --set secrets.JWT_SECRET=${{ secrets.JWT_SECRET }} \
+            --wait --timeout 5m
+        env:
+          KUBECONFIG: ${{ secrets.KUBECONFIG }}
