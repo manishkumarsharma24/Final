@@ -39,6 +39,11 @@ public class SecurityConfig {
                         // Public reads
                         .requestMatchers(HttpMethod.GET, "/api/products/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/search/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/recommendations/**").permitAll()
+                        // Analytics tracking — fire-and-forget, no auth required
+                        .requestMatchers("/api/analytics/**").permitAll()
+                        // Payment callback from gateway — no auth (uses payload signature)
+                        .requestMatchers("/api/notifications/payment/callback").permitAll()
                         // Reviews — GET is public, POST requires auth (enforced by @PreAuthorize)
                         // Admin
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")

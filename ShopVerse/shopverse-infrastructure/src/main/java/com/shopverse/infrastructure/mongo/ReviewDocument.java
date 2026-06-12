@@ -59,4 +59,5 @@ public class ReviewDocument {
     public boolean isVerified()                 { return verified; }
     public void setVerified(boolean v)          { this.verified = v; }
     public Instant getCreatedAt()               { return createdAt; }
+    public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
 }

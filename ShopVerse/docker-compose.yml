@@ -17,13 +17,18 @@ services:
       MONGO_URI: mongodb://mongo:27017/shopverse
       CASSANDRA_HOST: cassandra
       ES_URI: http://elasticsearch:9200
-      KAFKA_BROKERS: kafka:9092
+      KAFKA_BROKERS: kafka:29092
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASS: guest
       JWT_SECRET: shopverse-dev-secret-minimum-32-characters
     depends_on:
       postgres:   { condition: service_healthy }
       redis:      { condition: service_healthy }
       kafka:      { condition: service_started }
       mongo:      { condition: service_started }
+      rabbitmq:   { condition: service_healthy }
     networks: [shopverse-net]
     restart: unless-stopped
 
@@ -123,6 +128,25 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     networks: [shopverse-net]
 
+  # ─── RabbitMQ ─────────────────────────────────────────────────────────────
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: shopverse-rabbitmq
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # Management UI → http://localhost:15672 (guest/guest)
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    networks: [shopverse-net]
+
   # ─── Neo4j ────────────────────────────────────────────────────────────────
   neo4j:
     image: neo4j:5-community
@@ -177,6 +201,7 @@ volumes:
   cassandra-data:
   es-data:
   neo4j-data:
+  rabbitmq-data:
   grafana-data:
 
 networks:

@@ -11,6 +11,9 @@ import org.springframework.scheduling.annotation.EnableAsync;
  * Ch03-05: @EnableAsync — virtual-thread executor (Java 21).
  * Ch11-05: @EnableCaching — Redis cache abstraction.
  * Ch09-04: @EnableRetry — Spring Retry for transient failures.
+ *
+ * Note: @RetryableTopic is auto-activated by Spring Boot's KafkaAnnotationDrivenConfiguration
+ * in Spring Boot 3.2.x / Spring Kafka 3.1.x. No explicit @EnableRetryTopic needed.
  */
 @SpringBootApplication
 @EnableAsync

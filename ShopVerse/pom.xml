@@ -240,6 +240,55 @@
                         </execution>
                     </executions>
                 </plugin>
+                <!--
+                    maven-surefire-plugin — test execution and reporting.
+
+                    Key settings for diagnostics:
+                      trimStackTrace=false      → full stack traces in reports (not trimmed to 3 lines)
+                      redirectTestOutputToFile  → stdout/stderr per test class goes to
+                                                  target/surefire-reports/<ClassName>.txt
+                                                  (captures JVM-level errors that bypass Logback)
+                      rerunFailingTestsCount=0  → no automatic retries; failures are real
+                      forkCount=1 / reuseForks  → single forked JVM per module, reused across classes
+                                                  (faster; Spring context cache works across tests)
+                      argLine                   → JaCoCo injects its agent here via ${argLine};
+                                                  -XX:+HeapDumpOnOutOfMemoryError writes a heap dump
+                                                  to target/ if the JVM runs out of memory during tests
+                -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>3.2.5</version>
+                    <configuration>
+                        <!-- Full stack traces — do not trim to 3 lines -->
+                        <trimStackTrace>false</trimStackTrace>
+                        <!-- Write stdout/stderr for each test class to its own .txt file -->
+                        <redirectTestOutputToFile>true</redirectTestOutputToFile>
+                        <!-- Keep reports directory for post-mortem inspection -->
+                        <reportsDirectory>${project.build.directory}/surefire-reports</reportsDirectory>
+                        <!-- No automatic retries — each failure is a real failure -->
+                        <rerunFailingTestsCount>0</rerunFailingTestsCount>
+                        <!-- Single forked JVM per module, reused across test classes.
+                             Faster and lets Spring share its context cache. -->
+                        <forkCount>1</forkCount>
+                        <reuseForks>true</reuseForks>
+                        <!-- JVM args:
+                             @{argLine}   → JaCoCo injects its -javaagent here at build time
+                             HeapDump     → if OOM during tests you get a hprof in target/
+                             open-modules → needed by some Spring/Hibernate internals on Java 21 -->
+                        <argLine>@{argLine}
+                            -XX:+HeapDumpOnOutOfMemoryError
+                            -XX:HeapDumpPath=${project.build.directory}/heap-dump.hprof
+                            --add-opens java.base/java.lang=ALL-UNNAMED
+                            --add-opens java.base/java.util=ALL-UNNAMED
+                        </argLine>
+                        <!-- Ensure the test profile is active for all modules -->
+                        <systemPropertyVariables>
+                            <spring.profiles.active>test</spring.profiles.active>
+                        </systemPropertyVariables>
+                    </configuration>
+                </plugin>
+
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-compiler-plugin</artifactId>

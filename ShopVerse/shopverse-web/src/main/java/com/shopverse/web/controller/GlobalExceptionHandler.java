@@ -42,6 +42,18 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.error("SEC-002", "Access denied"));
     }
 
+    /**
+     * Handles invalid enum/type values passed to controllers (e.g. unknown eventType
+     * in AnalyticsController, unknown notification type in NotificationController).
+     * Returns 400 Bad Request instead of falling through to the 500 generic handler.
+     */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ApiResponse<Void>> handleIllegalArgument(IllegalArgumentException ex) {
+        log.warn("Invalid argument: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.error("GEN-004", ex.getMessage()));
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiResponse<Void>> handleValidation(MethodArgumentNotValidException ex) {
         String msg = ex.getBindingResult().getFieldErrors().stream()

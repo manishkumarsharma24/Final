@@ -177,7 +177,7 @@ class OrderControllerTest extends BaseIntegrationTest {
     @DisplayName("GET /api/orders/activity/{customerId} → 200 (reads from Cassandra mock)")
     void get_order_activity() throws Exception {
         // Cassandra mock returns empty list by default; just verify endpoint works
-        when(orderActivityCassandraRepository.findByCustomerId(customerId))
+        when(orderActivityCassandraRepository.findByCustomerIdOrderByEventTimeDesc(customerId))
                 .thenReturn(List.of());
 
         mockMvc.perform(get("/api/orders/activity/" + customerId)

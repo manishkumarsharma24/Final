@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    logback-test.xml — ShopVerse TEST logging
+    Logback loads this file automatically during test execution (overrides logback-spring.xml).
+
+    Goal: capture EVERYTHING needed to diagnose failures without running a debugger.
+    Specifically:
+      • Spring context startup failures (BeanCreationException, NoSuchBeanDefinitionException)
+      • Tomcat / embedded server errors during @SpringBootTest startup
+      • Hibernate DDL and SQL executed against H2
+      • Security filter-chain decisions (JWT, 401/403 flow)
+      • Full stack traces — trimStackTrace is disabled in Surefire (see parent pom)
+
+    Output locations:
+      Console          → everything (same terminal you run mvn from)
+      target/test-logs/shopverse-test.log  → flat file, append each run
+
+    After a failed build, open:
+        shopverse-web/target/test-logs/shopverse-test.log
+    and search for "ERROR" or "WARN" to find the root cause quickly.
+-->
+<configuration>
+
+    <!-- ── Properties ─────────────────────────────────────────────────────── -->
+    <property name="LOG_DIR"   value="target/test-logs"/>
+    <property name="LOG_FILE"  value="${LOG_DIR}/shopverse-test.log"/>
+
+    <!--  Pattern: timestamp | level | logger (shortened) | message + full exception -->
+    <property name="PATTERN"
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %-60logger{59} : %msg%n%throwable{full}"/>
+    <property name="CONSOLE_PATTERN"
+              value="%d{HH:mm:ss.SSS} %highlight(%-5level) [%thread] %cyan(%-50logger{49}) : %msg%n%throwable{short}"/>
+
+    <!-- ── Appenders ──────────────────────────────────────────────────────── -->
+
+    <!-- Console — short stack traces to keep terminal readable -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>${CONSOLE_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!--
+        Test log file — FULL stack traces, appended across runs.
+        This is the file to send when reporting errors.
+        Each test run appends a separator line so you can tell runs apart.
+    -->
+    <appender name="TEST_FILE" class="ch.qos.logback.core.FileAppender">
+        <file>${LOG_FILE}</file>
+        <append>true</append>
+        <encoder>
+            <pattern>${PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- ── Logger levels ──────────────────────────────────────────────────── -->
+
+    <!-- ① ShopVerse application code — DEBUG so all business logic is visible -->
+    <logger name="com.shopverse"                                   level="DEBUG"/>
+
+    <!-- ② Spring Test — shows context loading, caching, and setup failures   -->
+    <logger name="org.springframework.test"                        level="DEBUG"/>
+    <logger name="org.springframework.test.context"                level="DEBUG"/>
+    <!-- TestContextManager logs "Caught exception" at WARN — already captured by root -->
+
+    <!-- ③ Spring Context / Beans — shows BeanCreationException root causes   -->
+    <logger name="org.springframework.context"                     level="DEBUG"/>
+    <logger name="org.springframework.beans"                       level="DEBUG"/>
+    <logger name="org.springframework.beans.factory"               level="DEBUG"/>
+
+    <!-- ④ Spring Boot auto-configuration — shows what was included/excluded  -->
+    <logger name="org.springframework.boot"                        level="INFO"/>
+    <logger name="org.springframework.boot.autoconfigure"          level="DEBUG"/>
+
+    <!-- ⑤ Spring Web / Security — shows filter decisions, 401/403 reasons    -->
+    <logger name="org.springframework.web"                         level="INFO"/>
+    <logger name="org.springframework.security"                    level="DEBUG"/>
+
+    <!-- ⑥ Hibernate — DDL on H2 + all SQL so you can see schema issues       -->
+    <logger name="org.hibernate"                                   level="INFO"/>
+    <logger name="org.hibernate.SQL"                               level="DEBUG"/>
+    <logger name="org.hibernate.orm.jdbc.bind"                     level="TRACE"/>
+    <logger name="org.hibernate.tool.schema"                       level="DEBUG"/>
+
+    <!-- ⑦ H2 database engine -->
+    <logger name="org.h2"                                          level="INFO"/>
+
+    <!-- ⑧ Flyway (disabled in test profile but log if it fires anyway) -->
+    <logger name="org.flywaydb"                                    level="INFO"/>
+
+    <!-- ⑨ External-service libraries — WARN (all real connections are mocked) -->
+    <logger name="org.apache.kafka"                                level="WARN"/>
+    <logger name="org.springframework.kafka"                       level="WARN"/>
+    <logger name="org.springframework.amqp"                        level="WARN"/>
+    <logger name="com.rabbitmq"                                    level="WARN"/>
+    <logger name="org.springframework.data.mongodb"                level="WARN"/>
+    <logger name="com.datastax.oss"                                level="WARN"/>
+    <logger name="org.neo4j"                                       level="WARN"/>
+    <logger name="co.elastic.clients"                              level="WARN"/>
+    <logger name="io.lettuce"                                      level="WARN"/>
+    <logger name="io.netty"                                        level="WARN"/>
+    <logger name="reactor"                                         level="WARN"/>
+    <logger name="org.redisson"                                    level="WARN"/>
+
+    <!-- ⑩ Mockito / JUnit internals -->
+    <logger name="org.mockito"                                     level="WARN"/>
+    <logger name="net.bytebuddy"                                   level="WARN"/>
+
+    <!-- ── Root ───────────────────────────────────────────────────────────── -->
+    <!--
+        Root at INFO ensures any library not listed above still appears
+        when it logs at INFO or higher (errors from unknown components show up).
+    -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="TEST_FILE"/>
+    </root>
+
+</configuration>

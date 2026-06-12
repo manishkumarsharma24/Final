@@ -1,7 +1,6 @@
 package com.shopverse.infrastructure.kafka;
 
-import com.shopverse.domain.event.OrderEvent;
-import com.shopverse.domain.event.ProductEvent;
+import com.shopverse.domain.event.*;
 import com.shopverse.domain.port.EventPublisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,18 +12,20 @@ import org.springframework.stereotype.Component;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Ch12-01: Kafka producer — implements domain EventPublisher port.
+ * Kafka producer — implements domain EventPublisher port.
  * Routes domain events to appropriate Kafka topics.
- * Also publishes ProductEvents as Spring application events so @EventListener beans
- * (e.g. ProductSyncService) receive them for internal processing (e.g. ES indexing).
+ *
+ * Topics:
+ *   shopverse.orders        → OrderEvent
+ *   shopverse.products      → ProductEvent (also fires Spring app event for ES sync)
+ *   shopverse.notifications → NotificationEvent
+ *   shopverse.inventory     → InventoryEvent
+ *   shopverse.analytics     → AnalyticsEvent
  */
 @Component
 public class OrderKafkaProducer implements EventPublisher {
 
     private static final Logger log = LoggerFactory.getLogger(OrderKafkaProducer.class);
-
-    private static final String ORDERS_TOPIC   = "shopverse.orders";
-    private static final String PRODUCTS_TOPIC = "shopverse.products";
 
     private final KafkaTemplate<String, Object> kafkaTemplate;
     private final ApplicationEventPublisher springEventPublisher;
@@ -37,8 +38,7 @@ public class OrderKafkaProducer implements EventPublisher {
 
     @Override
     public void publish(Object event) {
-        // ProductEvents: publish as Spring application events for internal listeners (ES sync)
-        // and also send to Kafka for external/async consumers
+        // ProductEvents also fire as Spring application events for internal listeners (ES sync)
         if (event instanceof ProductEvent) {
             springEventPublisher.publishEvent(event);
         }
@@ -51,27 +51,34 @@ public class OrderKafkaProducer implements EventPublisher {
 
         future.whenComplete((result, ex) -> {
             if (ex != null) {
-                log.error("Failed to publish event {} to {}: {}", event.getClass().getSimpleName(), topic, ex.getMessage());
+                log.error("Failed to publish {} to {}: {}",
+                        event.getClass().getSimpleName(), topic, ex.getMessage());
             } else {
-                log.debug("Published {} to {}@{}", event.getClass().getSimpleName(), topic,
-                          result.getRecordMetadata().offset());
+                log.debug("Published {} to {}@{}", event.getClass().getSimpleName(),
+                        topic, result.getRecordMetadata().offset());
             }
         });
     }
 
     private String resolveTopic(Object event) {
         return switch (event) {
-            case OrderEvent e   -> ORDERS_TOPIC;
-            case ProductEvent e -> PRODUCTS_TOPIC;
-            default             -> "shopverse.events";
+            case OrderEvent e        -> KafkaTopicsConfig.ORDERS_TOPIC;
+            case ProductEvent e      -> KafkaTopicsConfig.PRODUCTS_TOPIC;
+            case NotificationEvent e -> KafkaTopicsConfig.NOTIFICATIONS_TOPIC;
+            case InventoryEvent e    -> KafkaTopicsConfig.INVENTORY_TOPIC;
+            case AnalyticsEvent e    -> KafkaTopicsConfig.ANALYTICS_TOPIC;
+            default                  -> "shopverse.events";
         };
     }
 
     private String resolveKey(Object event) {
         return switch (event) {
-            case OrderEvent e   -> e.orderId().toString();
-            case ProductEvent e -> e.productId().toString();
-            default             -> "unknown";
+            case OrderEvent e        -> e.orderId().toString();
+            case ProductEvent e      -> e.productId().toString();
+            case NotificationEvent e -> e.orderId().toString();
+            case InventoryEvent e    -> e.productId().toString();
+            case AnalyticsEvent e    -> e.sessionId();
+            default                  -> "unknown";
         };
     }
 }

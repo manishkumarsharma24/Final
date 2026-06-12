@@ -6,12 +6,18 @@ import com.shopverse.infrastructure.elasticsearch.ProductSyncService;
 import com.shopverse.infrastructure.kafka.OrderKafkaProducer;
 import com.shopverse.infrastructure.mongo.ReviewMongoRepository;
 import com.shopverse.infrastructure.neo4j.ProductGraphRepository;
+import com.shopverse.infrastructure.rabbitmq.EmailNotificationConsumer;
+import com.shopverse.infrastructure.rabbitmq.NotificationRabbitPublisher;
+import com.shopverse.infrastructure.rabbitmq.PaymentCallbackConsumer;
+import com.shopverse.infrastructure.rabbitmq.WebhookDeliveryConsumer;
 import com.shopverse.infrastructure.redis.RedisPubSubPublisher;
 import com.shopverse.infrastructure.redis.RedisSessionStore;
 import com.shopverse.security.JwtTokenProvider;
-import org.junit.jupiter.api.BeforeEach;
 import org.redisson.api.RedissonClient;
+import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -30,7 +36,7 @@ import org.springframework.transaction.annotation.Transactional;
  *  - Flyway disabled (migrations use PG-specific SQL: pg_trgm, partitions, procedures)
  *  - spring.cache.type=simple: @Cacheable uses ConcurrentHashMap — no Redis needed
  *  - @MockBean stubs replace all external-service beans (Redis, Redisson, Mongo,
- *    Cassandra, Neo4j, Elasticsearch, Kafka) so the context starts without Docker
+ *    Cassandra, Neo4j, Elasticsearch, Kafka, RabbitMQ) so the context starts without Docker
  *  - @Transactional rolls back each test — no teardown needed
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK)
@@ -81,9 +87,48 @@ public abstract class BaseIntegrationTest {
     @MockBean
     protected OrderKafkaProducer orderKafkaProducer;
 
+    /**
+     * Mocks KafkaTemplate — required because OrderKafkaConsumer injects KafkaTemplate
+     * directly (to forward events between topics). KafkaAutoConfiguration is excluded,
+     * so no auto-configured KafkaTemplate is created; this mock satisfies the dependency.
+     */
+    @MockBean
+    @SuppressWarnings("rawtypes")
+    protected KafkaTemplate kafkaTemplate;
+
     /** Replaces Neo4j graph repository. */
     @MockBean
     protected ProductGraphRepository productGraphRepository;
+
+    /**
+     * RabbitMQ ConnectionFactory mock — required because RabbitMQConfig declares
+     * rabbitTemplate(ConnectionFactory) and rabbitListenerContainerFactory(ConnectionFactory).
+     * RabbitAutoConfiguration is excluded in application-test.yml so no auto-configured
+     * CachingConnectionFactory is created; this mock satisfies the dependency.
+     */
+    @MockBean
+    protected ConnectionFactory rabbitConnectionFactory;
+
+    /** Replaces RabbitMQ template — prevents real AMQP sends in tests. */
+    @MockBean
+    protected RabbitTemplate rabbitTemplate;
+
+    /** Replaces RabbitMQ notification publisher. */
+    @MockBean
+    protected NotificationRabbitPublisher notificationRabbitPublisher;
+
+    /**
+     * Mock RabbitMQ consumer beans — prevents @RabbitListener containers from
+     * attempting to connect to a broker during test context startup.
+     */
+    @MockBean
+    protected EmailNotificationConsumer emailNotificationConsumer;
+
+    @MockBean
+    protected PaymentCallbackConsumer paymentCallbackConsumer;
+
+    @MockBean
+    protected WebhookDeliveryConsumer webhookDeliveryConsumer;
 
     /** Replaces Redis pub/sub publisher. */
     @MockBean

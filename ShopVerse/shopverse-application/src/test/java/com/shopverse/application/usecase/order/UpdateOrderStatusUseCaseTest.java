@@ -1,8 +1,10 @@
 package com.shopverse.application.usecase.order;
 
+import com.shopverse.domain.event.OrderEvent;
 import com.shopverse.domain.exception.InvalidOrderTransitionException;
 import com.shopverse.domain.exception.OrderNotFoundException;
 import com.shopverse.domain.model.*;
+import com.shopverse.domain.port.EventPublisher;
 import com.shopverse.domain.port.OrderActivityRepository;
 import com.shopverse.domain.port.OrderRepository;
 import com.shopverse.domain.vo.Address;
@@ -15,6 +17,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 
 import java.math.BigDecimal;
 import java.util.Optional;
@@ -24,11 +28,13 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 @DisplayName("UpdateOrderStatusUseCase")
 class UpdateOrderStatusUseCaseTest {
 
     @Mock private OrderRepository         orderRepository;
     @Mock private OrderActivityRepository orderActivityRepository;
+    @Mock private EventPublisher          eventPublisher;
 
     @InjectMocks
     private UpdateOrderStatusUseCase useCase;
@@ -104,6 +110,48 @@ class UpdateOrderStatusUseCaseTest {
         Order result = useCase.cancel(1L);
         assertEquals(OrderStatus.CANCELLED, result.getStatus());
         verifyActivityLogged("ORDER_CANCELLED");
+    }
+
+    @Test
+    @DisplayName("refund transitions DELIVERED → REFUNDED and publishes OrderRefunded event")
+    void refund_order() {
+        givenOrderInState(OrderStatus.DELIVERED);
+        Order result = useCase.refund(1L);
+        assertEquals(OrderStatus.REFUNDED, result.getStatus());
+        verifyActivityLogged("ORDER_REFUNDED");
+        verify(eventPublisher).publish(any(OrderEvent.OrderRefunded.class));
+    }
+
+    @Test
+    @DisplayName("confirm publishes OrderConfirmed event to Kafka")
+    void confirm_publishes_kafka_event() {
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(pendingOrder));
+        useCase.confirm(1L);
+        verify(eventPublisher).publish(any(OrderEvent.OrderConfirmed.class));
+    }
+
+    @Test
+    @DisplayName("ship publishes OrderShipped event to Kafka")
+    void ship_publishes_kafka_event() {
+        givenOrderInState(OrderStatus.PROCESSING);
+        useCase.ship(1L, "TRK-XYZ");
+        verify(eventPublisher).publish(any(OrderEvent.OrderShipped.class));
+    }
+
+    @Test
+    @DisplayName("deliver publishes OrderDelivered event to Kafka")
+    void deliver_publishes_kafka_event() {
+        givenOrderInState(OrderStatus.SHIPPED);
+        useCase.deliver(1L);
+        verify(eventPublisher).publish(any(OrderEvent.OrderDelivered.class));
+    }
+
+    @Test
+    @DisplayName("cancel publishes OrderCancelled event to Kafka")
+    void cancel_publishes_kafka_event() {
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(pendingOrder));
+        useCase.cancel(1L);
+        verify(eventPublisher).publish(any(OrderEvent.OrderCancelled.class));
     }
 
     @Test

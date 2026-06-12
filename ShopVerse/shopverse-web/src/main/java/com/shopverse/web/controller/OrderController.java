@@ -120,6 +120,19 @@ public class OrderController {
         return ResponseEntity.ok(ApiResponse.ok(OrderResponse.from(order), "Order cancelled"));
     }
 
+    /**
+     * PATCH /api/orders/{id}/refund — DELIVERED → REFUNDED
+     * Admin only. Publishes OrderRefunded to Kafka, which:
+     *   - releases inventory (StockReleased on inventory topic)
+     *   - sends a refund confirmation email via RabbitMQ (PaymentSuccessNotification)
+     */
+    @PatchMapping("/{id}/refund")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ApiResponse<OrderResponse>> refund(@PathVariable Long id) {
+        Order order = updateOrderStatusUseCase.refund(id);
+        return ResponseEntity.ok(ApiResponse.ok(OrderResponse.from(order), "Order refunded"));
+    }
+
     // ── Cassandra activity log ────────────────────────────────────────────────
 
     /**

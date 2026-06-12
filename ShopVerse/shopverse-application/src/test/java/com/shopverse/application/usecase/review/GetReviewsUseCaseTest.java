@@ -48,7 +48,7 @@ class GetReviewsUseCaseTest {
         when(customerRepository.findById(2L))
                 .thenReturn(Optional.of(new Customer(2L, "Bob", "Jones", "bob@example.com")));
 
-        List<ReviewWithCustomer> results = useCase.getForProduct(10L, null);
+        List<ReviewWithCustomer> results = useCase.getByProduct(10L);
 
         assertEquals(2, results.size());
         assertEquals("Alice Smith", results.get(0).customer().getFullName());
@@ -63,7 +63,7 @@ class GetReviewsUseCaseTest {
         when(customerRepository.findById(1L))
                 .thenReturn(Optional.of(new Customer(1L, "Alice", "Smith", "alice@example.com")));
 
-        List<ReviewWithCustomer> results = useCase.getForProduct(10L, 5);
+        List<ReviewWithCustomer> results = useCase.getByProductWithMinRating(10L, 5);
 
         assertEquals(1, results.size());
         assertEquals(5, results.get(0).review().getRating());
@@ -73,7 +73,7 @@ class GetReviewsUseCaseTest {
     @DisplayName("returns empty list when product has no reviews")
     void get_reviews_empty() {
         when(reviewRepository.findByProductId(99L)).thenReturn(List.of());
-        List<ReviewWithCustomer> results = useCase.getForProduct(99L, null);
+        List<ReviewWithCustomer> results = useCase.getByProduct(99L);
         assertTrue(results.isEmpty());
         verify(customerRepository, never()).findById(any());
     }
@@ -88,7 +88,7 @@ class GetReviewsUseCaseTest {
         when(customerRepository.findById(1L))
                 .thenReturn(Optional.of(new Customer(1L, "Alice", "Smith", "alice@example.com")));
 
-        useCase.getForProduct(10L, null);
+        useCase.getByProduct(10L);
 
         // Only ONE customer lookup despite TWO reviews from same customer
         verify(customerRepository, times(1)).findById(1L);

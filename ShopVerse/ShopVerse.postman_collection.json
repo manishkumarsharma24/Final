@@ -2142,6 +2142,50 @@
             "description": "Expects HTTP 422 Unprocessable Entity \u2014 order is already DELIVERED, cannot go back to CONFIRMED."
           },
           "response": []
+        },
+        {
+          "name": "\u2465 Refund Order (DELIVERED \u2192 REFUNDED)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/orders/{{orderId}}/refund",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "{{orderId}}",
+                "refund"
+              ]
+            },
+            "description": "Transitions order DELIVERED \u2192 REFUNDED.\n\nKafka event published: OrderRefunded \u2192 shopverse.orders topic\n\nConsumer handles:\n  1. Publishes InventoryEvent.StockReleased \u2192 inventory topic (restores stock)\n  2. Publishes NotificationEvent.PaymentSuccessNotification \u2192 notifications topic\n     \u2192 RabbitMQ consumer sends refund confirmation email\n\nPrerequisite: order must be in DELIVERED state (run steps \u2460\u2013\u2463 first)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Order status is REFUNDED', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.data.status).to.eql('REFUNDED');",
+                  "});"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
@@ -2508,6 +2552,920 @@
               ]
             },
             "description": "Uses {{customerId}} and {{productId}} from previous requests. Run after creating products."
+          }
+        }
+      ]
+    },
+    {
+      "name": "\ud83d\udd00 Kafka / Events",
+      "item": [
+        {
+          "name": "\ud83d\udce6 Order Lifecycle (Kafka Events)",
+          "description": "These REST calls trigger domain events published to Kafka.\n\nFlow:\n  POST /api/orders           \u2192 OrderPlaced  \u2192 consumer: confirmation email + inventory reservation\n  PATCH .../confirm          \u2192 OrderConfirmed \u2192 consumer: (logged, no email)\n  PATCH .../ship             \u2192 OrderShipped  \u2192 consumer: shipping notification email\n  PATCH .../deliver          \u2192 OrderDelivered \u2192 consumer: delivery notification email\n  PATCH .../cancel           \u2192 OrderCancelled \u2192 consumer: stock released + cancellation email\n  PATCH .../refund           \u2192 OrderRefunded  \u2192 consumer: stock released + refund email\n\nDLT: messages that fail all 3 retries route to shopverse.orders.DLT\nRetry: @RetryableTopic \u2014 3 attempts, 1s/2s backoff (enabled by @EnableRetryTopic on main class)",
+          "item": [
+            {
+              "name": "\u2460 Place Order (publishes OrderPlaced)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/orders",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "orders"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"customerId\": {{customerId}},\n  \"street\": \"123 Main St\",\n  \"city\": \"New York\",\n  \"state\": \"NY\",\n  \"postalCode\": \"10001\",\n  \"country\": \"US\",\n  \"items\": [\n    { \"productId\": {{productId}}, \"quantity\": 2 }\n  ]\n}"
+                },
+                "description": "Places an order. Internally:\n  1. Saves order to PostgreSQL (status: CONFIRMED \u2014 PlaceOrderUseCase calls confirm())\n  2. Publishes OrderPlaced to shopverse.orders Kafka topic\n  3. OrderKafkaConsumer receives it and:\n     a. Sends OrderConfirmationNotification via RabbitMQ \u2192 confirmation email\n     b. Publishes InventoryEvent.StockReserved to shopverse.inventory topic\n\nCaptures orderId automatically via test script."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                      "const body = pm.response.json();",
+                      "if (body.data && body.data.id) {",
+                      "    pm.collectionVariables.set('orderId', body.data.id);",
+                      "    console.log('orderId set to:', body.data.id);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "\u2461 Confirm Order (publishes OrderConfirmed)",
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/orders/{{orderId}}/confirm",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "orders",
+                    "{{orderId}}",
+                    "confirm"
+                  ]
+                },
+                "description": "CONFIRMED \u2192 PROCESSING path starts. Publishes OrderConfirmed.\nConsumer: no email sent for this transition (confirmation already sent on OrderPlaced)."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                      "pm.test('Status is CONFIRMED', () => pm.expect(pm.response.json().data.status).to.eql('CONFIRMED'));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "\u2462 Ship Order (publishes OrderShipped \u2192 shipping email)",
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/orders/{{orderId}}/ship",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "orders",
+                    "{{orderId}}",
+                    "ship"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{ \"trackingNumber\": \"TRK-{{$randomInt}}\" }"
+                },
+                "description": "Publishes OrderShipped with trackingNumber.\nConsumer: sends OrderShippedNotification via RabbitMQ \u2192 shipping confirmation email."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                      "pm.test('Status is SHIPPED', () => pm.expect(pm.response.json().data.status).to.eql('SHIPPED'));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "\u2463 Deliver Order (publishes OrderDelivered \u2192 delivery email)",
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/orders/{{orderId}}/deliver",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "orders",
+                    "{{orderId}}",
+                    "deliver"
+                  ]
+                },
+                "description": "Publishes OrderDelivered.\nConsumer: sends OrderDeliveredNotification via RabbitMQ \u2192 delivery confirmation email."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                      "pm.test('Status is DELIVERED', () => pm.expect(pm.response.json().data.status).to.eql('DELIVERED'));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "\u2464 Refund Order (publishes OrderRefunded \u2192 refund email + inventory)",
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/orders/{{orderId}}/refund",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "orders",
+                    "{{orderId}}",
+                    "refund"
+                  ]
+                },
+                "description": "DELIVERED \u2192 REFUNDED. Publishes OrderRefunded.\nConsumer:\n  1. Publishes InventoryEvent.StockReleased (restores inventory)\n  2. Sends PaymentSuccessNotification via RabbitMQ \u2192 refund confirmation email\n\nNote: run steps \u2460\u2013\u2463 first so the order is in DELIVERED state."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                      "pm.test('Status is REFUNDED', () => pm.expect(pm.response.json().data.status).to.eql('REFUNDED'));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "\u2464-alt Cancel Order (publishes OrderCancelled \u2192 cancel email + inventory)",
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/orders/{{orderId}}/cancel",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "orders",
+                    "{{orderId}}",
+                    "cancel"
+                  ]
+                },
+                "description": "Alternative to steps \u2462\u2013\u2464. Cancel from PENDING/CONFIRMED/PROCESSING.\nPublishes OrderCancelled.\nConsumer:\n  1. Publishes InventoryEvent.StockReleased (restores stock)\n  2. Sends OrderCancelledNotification via RabbitMQ \u2192 cancellation email\n\nUse this instead of steps \u2461\u2013\u2464 if you want to test the cancellation path."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                      "pm.test('Status is CANCELLED', () => pm.expect(pm.response.json().data.status).to.eql('CANCELLED'));"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Track Product View (Analytics)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/analytics/track",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "analytics",
+                "track"
+              ]
+            },
+            "description": "Publishes AnalyticsEvent.ProductViewed to Kafka shopverse.analytics topic",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventType\": \"PRODUCT_VIEW\",\n  \"sessionId\": \"sess-abc123\",\n  \"productId\": 1,\n  \"productName\": \"Laptop Pro\",\n  \"category\": \"Electronics\",\n  \"customerId\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Track Search (Analytics)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/analytics/track",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "analytics",
+                "track"
+              ]
+            },
+            "description": "Publishes AnalyticsEvent.ProductSearched to Kafka",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventType\": \"SEARCH\",\n  \"sessionId\": \"sess-abc123\",\n  \"query\": \"wireless headphones\",\n  \"resultsCount\": 12\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Track Add to Cart",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/analytics/track/cart",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "analytics",
+                "track",
+                "cart"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventType\": \"ADD_TO_CART\",\n  \"sessionId\": \"sess-abc123\",\n  \"productId\": 1,\n  \"quantity\": 2,\n  \"customerId\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Track Checkout Started",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/analytics/track",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "analytics",
+                "track"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventType\": \"CHECKOUT_STARTED\",\n  \"sessionId\": \"sess-abc123\",\n  \"customerId\": 1,\n  \"cartTotal\": 299.99,\n  \"itemCount\": 3\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Track Order Converted",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/analytics/track",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "analytics",
+                "track"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventType\": \"ORDER_CONVERTED\",\n  \"sessionId\": \"sess-abc123\",\n  \"orderId\": 1,\n  \"customerId\": 1,\n  \"total\": 299.99\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "\ud83d\udc30 RabbitMQ / Notifications",
+      "item": [
+        {
+          "name": "Send Order Confirmed Notification (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/notifications/send",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "send"
+              ]
+            },
+            "description": "Admin manually dispatches notification via RabbitMQ",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": 1,\n  \"customerEmail\": \"customer@example.com\",\n  \"type\": \"ORDER_CONFIRMED\",\n  \"customerId\": 1,\n  \"amount\": 99.99\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Send Shipping Update (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/notifications/send",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "send"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": 1,\n  \"customerEmail\": \"customer@example.com\",\n  \"type\": \"ORDER_SHIPPED\",\n  \"trackingNumber\": \"TRK-SV-001234\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Send Delivery Confirmation (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/notifications/send",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "send"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": 1,\n  \"customerEmail\": \"customer@example.com\",\n  \"type\": \"ORDER_DELIVERED\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Send Cancellation Notice (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/notifications/send",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "send"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": 1,\n  \"customerEmail\": \"customer@example.com\",\n  \"type\": \"ORDER_CANCELLED\",\n  \"reason\": \"Customer request\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Send Payment Success (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/notifications/send",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "send"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": 1,\n  \"customerEmail\": \"customer@example.com\",\n  \"type\": \"PAYMENT_SUCCESS\",\n  \"amount\": 99.99,\n  \"paymentMethod\": \"STRIPE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Send Payment Failed (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/notifications/send",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "send"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": 1,\n  \"customerEmail\": \"customer@example.com\",\n  \"type\": \"PAYMENT_FAILED\",\n  \"reason\": \"Insufficient funds\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Payment Callback (Gateway Webhook)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/notifications/payment/callback",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "payment",
+                "callback"
+              ]
+            },
+            "description": "Stripe/PayPal sends this to ShopVerse after payment processing",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": 1,\n  \"status\": \"SUCCESS\",\n  \"amount\": 99.99,\n  \"paymentMethod\": \"STRIPE\",\n  \"customerEmail\": \"customer@example.com\",\n  \"webhookId\": \"evt_stripe_12345\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Payment Callback - Failed",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/notifications/payment/callback",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "payment",
+                "callback"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": 1,\n  \"status\": \"FAILED\",\n  \"failureReason\": \"Card declined\",\n  \"customerEmail\": \"customer@example.com\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Register Merchant Webhook",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/notifications/webhook/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "webhook",
+                "register"
+              ]
+            },
+            "description": "Register a URL to receive ShopVerse order events via RabbitMQ fanout",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"webhookUrl\": \"https://merchant.example.com/order-hooks\",\n  \"events\": [\n    \"ORDER_PLACED\",\n    \"ORDER_SHIPPED\",\n    \"ORDER_DELIVERED\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "\ud83c\udf10 Neo4j / Recommendations",
+      "item": [
+        {
+          "name": "Get Recommendations for Product",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/recommendations/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "recommendations",
+                "1"
+              ]
+            },
+            "description": "2-hop collaborative filtering + VIEWED_AFTER from Neo4j graph"
+          }
+        },
+        {
+          "name": "Get Top Rated in Category",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/recommendations/category/Electronics?excludeId=1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "recommendations",
+                "category",
+                "Electronics?excludeId=1"
+              ]
+            },
+            "description": "Category affinity recommendations"
+          }
+        },
+        {
+          "name": "Track Product View (Graph)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/recommendations/track/view",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "recommendations",
+                "track",
+                "view"
+              ]
+            },
+            "description": "Records VIEWED_AFTER relationship in Neo4j",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": 2,\n  \"productName\": \"Wireless Mouse\",\n  \"category\": \"Electronics\",\n  \"customerId\": 1,\n  \"sessionId\": \"sess-abc123\",\n  \"previousProductId\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Track Purchase (Graph)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/recommendations/track/purchase",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "recommendations",
+                "track",
+                "purchase"
+              ]
+            },
+            "description": "Records FREQUENTLY_BOUGHT_TOGETHER relationships for all product pairs in order",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": 10,\n  \"productIds\": [\n    1,\n    2,\n    3\n  ],\n  \"productNames\": [\n    \"Laptop\",\n    \"Mouse\",\n    \"Keyboard\"\n  ],\n  \"productCategories\": [\n    \"Electronics\",\n    \"Electronics\",\n    \"Electronics\"\n  ],\n  \"customerId\": 1,\n  \"sessionId\": \"sess-abc123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
           }
         }
       ]

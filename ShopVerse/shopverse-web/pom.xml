@@ -116,6 +116,36 @@
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
             </plugin>
+            <!--
+                Module-level Surefire override for shopverse-web.
+                Merges with the parent pluginManagement config (trimStackTrace, redirectTestOutputToFile, etc.)
+                and adds the logging.config system property.
+
+                WHY this must be a JVM system property, not application-test.yml:
+                Spring Boot reads logging.config during early bootstrap (ApplicationStartingEvent),
+                before any profile-specific yml files are loaded. Setting it in application-test.yml
+                is too late — the logging system is already initialized at that point.
+                Passing it as -Dlogging.config via Surefire's systemPropertyVariables ensures it
+                is present as a JVM system property from the very start of the forked JVM.
+
+                EFFECT: logback-test.xml is used for ALL shopverse-web tests, overriding the
+                logback-spring.xml that Spring Boot would otherwise prefer (it checks
+                logback-spring.xml before logback-test.xml in its loading order).
+                Test logs appear in: target/test-logs/shopverse-test.log
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <!--
+                            Force logback-test.xml — must be a JVM system property.
+                            This file is on the test classpath (src/test/resources/).
+                        -->
+                        <logging.config>classpath:logback-test.xml</logging.config>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 </project>

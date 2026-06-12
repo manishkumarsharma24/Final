@@ -68,6 +68,23 @@ spring:
     local-datacenter: datacenter1
     schema-action: NONE
 
+  # RabbitMQ / AMQP
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:guest}
+    password: ${RABBITMQ_PASS:guest}
+    virtual-host: /
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    listener:
+      simple:
+        retry:
+          enabled: true
+          initial-interval: 1000
+          max-attempts: 3
+          multiplier: 2.0
+
   # Ch12-01: Kafka
   kafka:
     bootstrap-servers: ${KAFKA_BROKERS:localhost:9092}
@@ -82,13 +99,22 @@ spring:
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
       acks: all
       retries: 3
+      properties:
+        # Adds __TypeId__ header with the concrete class name (e.g. OrderEvent$OrderPlaced).
+        # JsonDeserializer on the consumer reads this header to instantiate the correct
+        # sealed-interface subtype without requiring @JsonTypeInfo on domain classes.
+        spring.json.add.type.headers: true
     consumer:
       group-id: shopverse-consumer
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
       properties:
+        # Allow deserialization of any class under com.shopverse (required for __TypeId__ lookup).
         spring.json.trusted.packages: "com.shopverse.*"
+        # Use the __TypeId__ header (not the target type declared on the @KafkaListener method)
+        # to determine which class to deserialize into. Essential for sealed interface subtypes.
+        spring.json.use.type.headers: true
 
   # Ch07-03: i18n
   messages:
