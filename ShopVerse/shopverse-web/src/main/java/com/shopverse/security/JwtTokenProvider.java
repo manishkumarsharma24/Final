@@ -55,6 +55,22 @@ public class JwtTokenProvider {
         }
     }
 
+    /**
+     * Returns the remaining lifetime of the token in milliseconds.
+     * Used by logout to set the Redis blocklist TTL so the key auto-expires
+     * at the same time the JWT itself would have expired.
+     * Returns 0 if the token is already expired or invalid.
+     */
+    public long getRemainingTtlMs(String token) {
+        try {
+            Date expiry = parseClaims(token).getExpiration();
+            long remaining = expiry.getTime() - System.currentTimeMillis();
+            return Math.max(0, remaining);
+        } catch (JwtException | IllegalArgumentException e) {
+            return 0;
+        }
+    }
+
     private Claims parseClaims(String token) {
         return Jwts.parser()
                 .verifyWith(secretKey)

@@ -5,7 +5,7 @@ spring:
 
   # Ch04-01: JPA / Hibernate
   datasource:
-    url: jdbc:postgresql://localhost:5432/shopverse
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/shopverse
     username: ${DB_USER:shopverse}
     password: ${DB_PASS:shopverse}
     hikari:
@@ -67,6 +67,11 @@ spring:
     keyspace-name: shopverse
     local-datacenter: datacenter1
     schema-action: NONE
+
+# Set to true when Cassandra is running (docker-compose up -d cassandra).
+# false → NoOpOrderActivityAdapter is used; order activity audit log is silently skipped.
+cassandra:
+  enabled: false
 
   # RabbitMQ / AMQP
   rabbitmq:

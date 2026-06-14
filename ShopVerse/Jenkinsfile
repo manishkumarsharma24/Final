@@ -1,0 +1,125 @@
+// Demonstrates: Chapter 19 — CI/CD Pipeline Design
+// Pipeline: Git checkout → Backend tests → Backend build → Frontend build → Docker build → Deploy
+
+pipeline {
+    agent any
+
+    // ── Environment ────────────────────────────────────────────────────────
+    environment {
+        // Must match the compose project name so Jenkins targets the right containers
+        COMPOSE_PROJECT_NAME = 'shopverse'
+        COMPOSE_FILE         = 'docker-compose.yml'
+    }
+
+    // ── Options ────────────────────────────────────────────────────────────
+    options {
+        // Keep the last 10 builds, discard older ones
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        // Abort if the pipeline runs longer than 30 minutes
+        timeout(time: 30, unit: 'MINUTES')
+        // Don't run concurrent builds on the same branch
+        disableConcurrentBuilds()
+        // Add timestamps to console output
+        timestamps()
+    }
+
+    // ── Stages ─────────────────────────────────────────────────────────────
+    stages {
+
+        // ── 1. Checkout ───────────────────────────────────────────────────
+        stage('Checkout') {
+            steps {
+                // Checks out the branch/tag that triggered the build.
+                // Configure the Git repo URL in Jenkins job settings (Pipeline → SCM).
+                checkout scm
+                echo "Building commit: ${env.GIT_COMMIT?.take(8) ?: 'unknown'}"
+            }
+        }
+
+        // ── 2. Backend — Unit Tests ───────────────────────────────────────
+        // Uses ./mvnw (Maven Wrapper) so no Maven installation is needed.
+        // Tests run with the 'test' Spring profile (no real DB required for unit tests).
+        stage('Test Backend') {
+            steps {
+                sh '''
+                    chmod +x mvnw
+                    ./mvnw -pl shopverse-domain,shopverse-application \
+                           -am test -q \
+                           -Dspring.profiles.active=test
+                '''
+            }
+            post {
+                always {
+                    // Publish JUnit results if any test reports were generated
+                    junit allowEmptyResults: true,
+                          testResults: '**/target/surefire-reports/*.xml'
+                }
+            }
+        }
+
+        // ── 3. Backend — Package ──────────────────────────────────────────
+        // Produces shopverse-web/target/shopverse-web-*.jar
+        stage('Build Backend') {
+            steps {
+                sh './mvnw -pl shopverse-web -am package -DskipTests -q'
+                archiveArtifacts artifacts: 'shopverse-web/target/*.jar',
+                                 fingerprint: true
+            }
+        }
+
+        // ── 4. Frontend — Install + Build ─────────────────────────────────
+        // Produces shopverse-ui/dist/ (static files served by Nginx in the UI container)
+        stage('Build Frontend') {
+            steps {
+                dir('shopverse-ui') {
+                    sh 'npm ci --prefer-offline'
+                    sh 'npm run build'
+                }
+            }
+        }
+
+        // ── 5. Docker — Build Images ──────────────────────────────────────
+        // Builds only the app images (backend + UI).
+        // Infrastructure images (postgres, redis, kafka …) are pulled, not built.
+        stage('Docker Build') {
+            steps {
+                sh 'docker compose build --no-cache shopverse-app shopverse-ui'
+            }
+        }
+
+        // ── 6. Deploy — Restart App Containers ───────────────────────────
+        // --no-deps  : only restart shopverse-app and shopverse-ui,
+        //              leave postgres/redis/kafka/… running untouched.
+        // -d         : detached mode
+        stage('Deploy') {
+            steps {
+                sh '''
+                    docker compose up -d --no-deps \
+                        shopverse-app \
+                        shopverse-ui
+                '''
+                // Brief wait then verify both containers are healthy
+                sh 'sleep 10'
+                sh 'docker compose ps shopverse-app shopverse-ui'
+            }
+        }
+    }
+
+    // ── Post-build actions ─────────────────────────────────────────────────
+    post {
+        success {
+            echo "✅ Build #${BUILD_NUMBER} deployed successfully — ${env.GIT_COMMIT?.take(8) ?: ''}"
+        }
+        failure {
+            echo "❌ Build #${BUILD_NUMBER} failed — check the logs above"
+        }
+        always {
+            // Clean up the workspace to free disk space after every build.
+            // Requires the 'Workspace Cleanup' Jenkins plugin (pre-installed on LTS).
+            cleanWs(cleanWhenNotBuilt: false,
+                    deleteDirs: true,
+                    disableDeferredWipeout: true,
+                    notFailBuild: true)
+        }
+    }
+}

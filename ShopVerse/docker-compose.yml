@@ -10,18 +10,32 @@ services:
     ports:
       - "8080:8080"
     environment:
+      # PostgreSQL
+      DB_HOST: postgres
+      DB_PORT: 5432
       DB_USER: shopverse
       DB_PASS: shopverse
+      # Redis
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      # MongoDB
       MONGO_URI: mongodb://mongo:27017/shopverse
+      # Cassandra
       CASSANDRA_HOST: cassandra
+      # Elasticsearch
       ES_URI: http://elasticsearch:9200
+      # Kafka
       KAFKA_BROKERS: kafka:29092
+      # RabbitMQ
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: 5672
       RABBITMQ_USER: guest
       RABBITMQ_PASS: guest
+      # Neo4j
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASS: shopverse
+      # JWT
       JWT_SECRET: shopverse-dev-secret-minimum-32-characters
     depends_on:
       postgres:   { condition: service_healthy }
@@ -29,6 +43,41 @@ services:
       kafka:      { condition: service_started }
       mongo:      { condition: service_started }
       rabbitmq:   { condition: service_healthy }
+    networks: [shopverse-net]
+    restart: unless-stopped
+
+  # ─── Jenkins CI/CD ────────────────────────────────────────────────────────
+  jenkins:
+    build:
+      context: ./jenkins
+      dockerfile: Dockerfile
+      # Pass host docker socket GID so jenkins user can run docker commands.
+      # On Linux: $(stat -c '%g' /var/run/docker.sock)
+      # On Docker Desktop (Mac/Windows): usually 0 (root) — leave as default 999
+      args:
+        DOCKER_GID: "999"
+    container_name: shopverse-jenkins
+    ports:
+      - "8090:8080"    # Jenkins UI  → http://localhost:8090
+      - "50000:50000"  # Jenkins agent port
+    volumes:
+      - jenkins-data:/var/jenkins_home                      # Persist Jenkins jobs/config
+      - /var/run/docker.sock:/var/run/docker.sock           # Docker socket for docker compose commands
+    environment:
+      JAVA_OPTS: "-Djenkins.install.runSetupWizard=false"
+    networks: [shopverse-net]
+    restart: unless-stopped
+
+  # ─── React UI ─────────────────────────────────────────────────────────────
+  shopverse-ui:
+    build:
+      context: ./shopverse-ui
+      dockerfile: Dockerfile
+    container_name: shopverse-ui
+    ports:
+      - "5173:80"
+    depends_on:
+      - shopverse-app
     networks: [shopverse-net]
     restart: unless-stopped
 
@@ -195,6 +244,7 @@ services:
     networks: [shopverse-net]
 
 volumes:
+  jenkins-data:
   postgres-data:
   redis-data:
   mongo-data:

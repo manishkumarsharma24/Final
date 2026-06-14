@@ -15,5 +15,6 @@ public interface OrderRepository {
     Optional<Order> findById(Long id);
     List<Order> findByCustomerId(Long customerId);
     List<Order> findByStatus(OrderStatus status);
+    List<Order> findAll();
     void deleteById(Long id);
 }

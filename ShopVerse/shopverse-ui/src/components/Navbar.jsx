@@ -1,56 +1,77 @@
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { useState } from 'react';
 
 export default function Navbar() {
   const { totalItems } = useCart();
-  const { user, logout, isLoggedIn } = useAuth();
+  const { user, isLoggedIn, logout } = useAuth();
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
 
+  const handleLogout = async () => {
+    await logout();
+    navigate('/login');
+  };
+
   const handleSearch = (e) => {
     e.preventDefault();
-    if (search.trim()) navigate(`/products?keyword=${encodeURIComponent(search.trim())}`);
+    if (search.trim()) {
+      navigate(`/products?q=${encodeURIComponent(search.trim())}`);
+      setSearch('');
+    }
   };
+
+  const isAdmin = user?.role === 'ADMIN';
 
   return (
     <nav className="navbar">
-      <div className="navbar-inner">
-        <Link to="/" className="navbar-brand">
-          <span className="brand-icon">🛍️</span>
-          <span className="brand-name">ShopVerse</span>
+      <Link to="/" className="nav-brand">
+        <span className="brand-emoji">🛍️</span>
+        <span className="brand-text">Shop<span>Verse</span></span>
+      </Link>
+
+      <form className="nav-search" onSubmit={handleSearch}>
+        <input
+          type="text"
+          placeholder="Search products… (Elasticsearch)"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+        />
+        <button type="submit">⚡ Search</button>
+      </form>
+
+      <div className="nav-links">
+        <NavLink to="/products" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
+          Products
+        </NavLink>
+
+        {isLoggedIn ? (
+          <>
+            <NavLink to="/orders" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
+              Orders
+            </NavLink>
+            <NavLink to="/profile" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
+              👤 {user.name?.split(' ')[0] || 'Account'}
+            </NavLink>
+            {isAdmin && (
+              <NavLink to="/admin" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
+                style={{ color: 'var(--primary)', fontWeight: 700 }}>
+                ⚙️ Admin
+              </NavLink>
+            )}
+            <button className="nav-logout-btn" onClick={handleLogout} title="Sign out">
+              Logout
+            </button>
+          </>
+        ) : (
+          <Link to="/login" className="nav-link">Sign In</Link>
+        )}
+
+        <Link to="/cart" className="nav-cart-btn">
+          🛒
+          {totalItems > 0 && <span className="cart-badge">{totalItems}</span>}
         </Link>
-
-        <form className="search-form" onSubmit={handleSearch}>
-          <input
-            type="text"
-            placeholder="Search products…"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="search-input"
-          />
-          <button type="submit" className="search-btn">🔍</button>
-        </form>
-
-        <div className="navbar-actions">
-          <Link to="/products" className="nav-link">Products</Link>
-
-          {isLoggedIn ? (
-            <>
-              <Link to="/orders" className="nav-link">My Orders</Link>
-              <span className="nav-user">👤 {user.name?.split(' ')[0]}</span>
-              <button className="btn-outline-sm" onClick={() => { logout(); navigate('/'); }}>Logout</button>
-            </>
-          ) : (
-            <Link to="/login" className="btn-outline-sm">Sign In</Link>
-          )}
-
-          <Link to="/cart" className="cart-btn">
-            🛒
-            {totalItems > 0 && <span className="cart-badge">{totalItems}</span>}
-          </Link>
-        </div>
       </div>
     </nav>
   );

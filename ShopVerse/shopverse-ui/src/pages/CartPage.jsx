@@ -1,14 +1,17 @@
-import { useCart } from '../context/CartContext';
 import { useNavigate } from 'react-router-dom';
+import { useCart } from '../context/CartContext';
+import { useAuth } from '../context/AuthContext';
 
-const CATEGORY_EMOJI = {
-  electronics:'⚡', furniture:'🪑', lifestyle:'✨',
-  accessories:'👜', kitchen:'🍳', clothing:'👕', default:'📦',
-};
+const EMOJI_MAP = { electronics: '💻', furniture: '🪑', kitchen: '🍳', clothing: '👕', lifestyle: '🌿', accessories: '👜' };
 
 export default function CartPage() {
-  const { items, removeFromCart, updateQty, clearCart, totalPrice } = useCart();
+  const { items, removeFromCart, updateQty, clearCart, totalPrice, totalItems } = useCart();
+  const { isLoggedIn } = useAuth();
   const navigate = useNavigate();
+
+  const shipping = totalPrice >= 100 ? 0 : 9.99;
+  const tax = totalPrice * 0.08;
+  const grandTotal = totalPrice + shipping + tax;
 
   if (items.length === 0) {
     return (
@@ -16,59 +19,60 @@ export default function CartPage() {
         <div className="empty-cart">
           <span className="empty-icon">🛒</span>
           <h2>Your cart is empty</h2>
-          <p>Add some products and come back!</p>
-          <button className="btn-primary" onClick={() => navigate('/products')}>Browse Products</button>
+          <p>Looks like you haven't added anything yet</p>
+          <button className="btn-primary-lg" onClick={() => navigate('/products')}>Start Shopping</button>
         </div>
       </div>
     );
   }
 
-  const shipping = totalPrice >= 50 ? 0 : 4.99;
-  const tax      = totalPrice * 0.08;
-  const grandTotal = totalPrice + shipping + tax;
-
   return (
     <div className="page">
-      <h1 className="page-title">Shopping Cart</h1>
+      <h1 className="page-title">Shopping Cart ({totalItems} item{totalItems !== 1 ? 's' : ''})</h1>
       <div className="cart-layout">
-        <div className="cart-items">
-          {items.map(item => (
-            <div key={item.id} className="cart-item">
-              <div className="cart-item-img">
-                {CATEGORY_EMOJI[item.category] || CATEGORY_EMOJI.default}
-              </div>
-              <div className="cart-item-info">
-                <p className="cart-item-name">{item.name}</p>
-                <p className="cart-item-price">${item.price.toFixed(2)} each</p>
-              </div>
-              <div className="cart-item-controls">
-                <div className="qty-control">
-                  <button onClick={() => updateQty(item.id, item.quantity - 1)}>−</button>
-                  <span className="qty-value">{item.quantity}</span>
-                  <button onClick={() => updateQty(item.id, item.quantity + 1)}>+</button>
-                </div>
-                <span className="cart-item-subtotal">${(item.price * item.quantity).toFixed(2)}</span>
-                <button className="remove-btn" onClick={() => removeFromCart(item.id)}>✕</button>
-              </div>
-            </div>
-          ))}
 
+        {/* Items */}
+        <div>
+          <div className="cart-items">
+            {items.map(item => (
+              <div key={item.id} className="cart-item">
+                <div className="cart-item-img">{EMOJI_MAP[item.category] || '📦'}</div>
+                <div>
+                  <div className="cart-item-name">{item.name}</div>
+                  <div className="cart-item-price">${item.price?.toFixed(2)} each</div>
+                </div>
+                <div className="cart-item-controls">
+                  <div className="qty-control">
+                    <button onClick={() => updateQty(item.id, item.quantity - 1)}>−</button>
+                    <span className="qty-value">{item.quantity}</span>
+                    <button onClick={() => updateQty(item.id, item.quantity + 1)}>+</button>
+                  </div>
+                  <span className="cart-item-subtotal">${(item.price * item.quantity).toFixed(2)}</span>
+                  <button className="remove-btn" onClick={() => removeFromCart(item.id)}>✕</button>
+                </div>
+              </div>
+            ))}
+          </div>
           <div className="cart-footer-actions">
-            <button className="link-btn" onClick={clearCart}>🗑 Clear cart</button>
-            <button className="link-btn" onClick={() => navigate('/products')}>← Continue shopping</button>
+            <button className="btn-ghost" onClick={() => navigate('/products')}>← Continue Shopping</button>
+            <button className="link-btn" onClick={clearCart}>🗑 Clear Cart</button>
           </div>
         </div>
 
+        {/* Summary */}
         <div className="cart-summary">
-          <h2 className="summary-title">Order Summary</h2>
+          <h3 className="summary-title">Order Summary</h3>
           <div className="summary-rows">
             <div className="summary-row">
-              <span>Subtotal ({items.reduce((s,i) => s+i.quantity, 0)} items)</span>
+              <span>Subtotal</span>
               <span>${totalPrice.toFixed(2)}</span>
             </div>
             <div className="summary-row">
               <span>Shipping</span>
-              <span>{shipping === 0 ? <span className="free-badge">FREE</span> : `$${shipping.toFixed(2)}`}</span>
+              {shipping === 0
+                ? <span className="free-badge">FREE</span>
+                : <span>${shipping.toFixed(2)}</span>
+              }
             </div>
             <div className="summary-row">
               <span>Tax (8%)</span>
@@ -82,13 +86,16 @@ export default function CartPage() {
           </div>
 
           {shipping > 0 && (
-            <p className="free-ship-hint">
-              Add ${(50 - totalPrice).toFixed(2)} more for free shipping!
-            </p>
+            <div className="free-ship-hint">
+              Add ${(100 - totalPrice).toFixed(2)} more for free shipping!
+            </div>
           )}
 
-          <button className="btn-primary-full" onClick={() => navigate('/checkout')}>
-            Proceed to Checkout →
+          <button
+            className="btn-primary-full"
+            onClick={() => isLoggedIn ? navigate('/checkout') : navigate('/login')}
+          >
+            {isLoggedIn ? 'Proceed to Checkout' : 'Sign in to Checkout'}
           </button>
         </div>
       </div>

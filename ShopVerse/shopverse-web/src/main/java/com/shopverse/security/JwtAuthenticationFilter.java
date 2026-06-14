@@ -1,5 +1,6 @@
 package com.shopverse.security;
 
+import com.shopverse.infrastructure.redis.RedisSessionStore;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -17,14 +18,18 @@ import java.util.List;
 /**
  * Ch07-06: JWT filter — validates Bearer token on every request.
  * Extends OncePerRequestFilter — guaranteed single execution per request.
+ * Ch06-01: Checks Redis blocklist so logged-out tokens are rejected immediately.
  */
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
-    private final JwtTokenProvider jwtTokenProvider;
+    private final JwtTokenProvider    jwtTokenProvider;
+    private final RedisSessionStore   redisSessionStore;
 
-    public JwtAuthenticationFilter(JwtTokenProvider jwtTokenProvider) {
-        this.jwtTokenProvider = jwtTokenProvider;
+    public JwtAuthenticationFilter(JwtTokenProvider jwtTokenProvider,
+                                   RedisSessionStore redisSessionStore) {
+        this.jwtTokenProvider  = jwtTokenProvider;
+        this.redisSessionStore = redisSessionStore;
     }
 
     @Override
@@ -32,7 +37,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                                     HttpServletResponse response,
                                     FilterChain chain) throws ServletException, IOException {
         String token = extractToken(request);
-        if (token != null && jwtTokenProvider.isValid(token)) {
+        if (token != null && jwtTokenProvider.isValid(token)
+                && !redisSessionStore.isBlocklisted(token)) {
             String username = jwtTokenProvider.getUsername(token);
             String role     = jwtTokenProvider.getRole(token);
             var auth = new UsernamePasswordAuthenticationToken(

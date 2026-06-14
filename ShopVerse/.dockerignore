@@ -1,0 +1,28 @@
+# Build output
+**/target/
+**/dist/
+
+# Frontend deps — massive, not needed for backend build
+shopverse-ui/node_modules/
+shopverse-ui/.dockerignore
+
+# Version control
+.git/
+.gitignore
+
+# IDE / OS
+.idea/
+*.iml
+.DS_Store
+*.swp
+
+# Docs & test artifacts
+**/*.md
+load-tests/
+benchmarks/
+
+# Local overrides
+docker-compose.override.yml
+docker-compose.prod.yml
+infra/
+k8s/

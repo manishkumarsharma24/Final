@@ -58,6 +58,11 @@ public class JpaOrderRepositoryAdapter implements OrderRepository {
     }
 
     @Override
+    public List<Order> findAll() {
+        return jpaRepo.findAll().stream().map(this::toDomain).toList();
+    }
+
+    @Override
     public void deleteById(Long id) { jpaRepo.deleteById(id); }
 
     // ── Mapping helpers ───────────────────────────────────────────────────────

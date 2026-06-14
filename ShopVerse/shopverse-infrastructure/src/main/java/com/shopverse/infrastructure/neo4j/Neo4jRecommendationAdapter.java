@@ -5,6 +5,7 @@ import com.shopverse.domain.port.RecommendationRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.stream.Collectors;
@@ -41,6 +42,7 @@ public class Neo4jRecommendationAdapter implements RecommendationRepository {
     }
 
     @Override
+    @Transactional("neo4jTransactionManager")
     public void recordPurchasedTogether(Long productId1, Long productId2, Long orderId) {
         try {
             graphRepository.createOrIncrementBoughtTogether(productId1, productId2, orderId);
@@ -52,6 +54,7 @@ public class Neo4jRecommendationAdapter implements RecommendationRepository {
     }
 
     @Override
+    @Transactional("neo4jTransactionManager")
     public void recordViewedAfter(Long fromProductId, Long toProductId, String sessionId) {
         try {
             graphRepository.createOrIncrementViewedAfter(fromProductId, toProductId, sessionId);
@@ -62,6 +65,7 @@ public class Neo4jRecommendationAdapter implements RecommendationRepository {
     }
 
     @Override
+    @Transactional("neo4jTransactionManager")
     public void upsertProductNode(Long productId, String name, String category, double avgRating) {
         try {
             graphRepository.upsertProduct(productId, name, category, avgRating);

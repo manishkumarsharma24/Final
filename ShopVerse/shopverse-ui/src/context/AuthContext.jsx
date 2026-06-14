@@ -1,4 +1,5 @@
 import { createContext, useContext, useState } from 'react';
+import { api } from '../api/client';
 
 const AuthContext = createContext(null);
 
@@ -16,7 +17,9 @@ export function AuthProvider({ children }) {
     setUser(userData);
   };
 
-  const logout = () => {
+  const logout = async () => {
+    // Blocklist the token in Redis so it's immediately invalid server-side
+    await api.logout();
     localStorage.removeItem('sv_token');
     localStorage.removeItem('sv_user');
     setUser(null);

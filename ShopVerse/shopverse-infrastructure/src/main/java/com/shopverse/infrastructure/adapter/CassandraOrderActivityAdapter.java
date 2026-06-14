@@ -4,6 +4,7 @@ import com.shopverse.domain.model.OrderActivity;
 import com.shopverse.domain.port.OrderActivityRepository;
 import com.shopverse.infrastructure.cassandra.OrderActivityCassandraRepository;
 import com.shopverse.infrastructure.cassandra.OrderActivityEntity;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
@@ -11,9 +12,11 @@ import java.util.List;
 
 /**
  * Hexagonal adapter — OrderActivityRepository domain port → Cassandra.
- * Maps between the domain OrderActivity model and the OrderActivityEntity Spring Data entity.
+ * Active only when cassandra.enabled=true (the default).
+ * When Cassandra is disabled, NoOpOrderActivityAdapter takes over.
  */
 @Repository
+@ConditionalOnProperty(name = "cassandra.enabled", havingValue = "true", matchIfMissing = true)
 public class CassandraOrderActivityAdapter implements OrderActivityRepository {
 
     private final OrderActivityCassandraRepository cassandraRepo;

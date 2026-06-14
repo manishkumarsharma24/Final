@@ -32,6 +32,26 @@ public class RedisSessionStore {
         redisTemplate.delete(PREFIX + token);
     }
 
+    // ── Token blocklist (logout) ───────────────────────────────────────────────
+
+    private static final String BLOCKLIST_PREFIX = "blocklist:";
+
+    /**
+     * Add a token to the blocklist so it is rejected even though its JWT signature
+     * is still valid.  The key expires automatically when the token would have expired,
+     * keeping Redis memory bounded.
+     */
+    public void blocklist(String token, Duration ttl) {
+        if (ttl.isPositive()) {
+            redisTemplate.opsForValue().set(BLOCKLIST_PREFIX + token, "invalidated", ttl);
+        }
+    }
+
+    /** Returns true when the token has been explicitly invalidated via logout. */
+    public boolean isBlocklisted(String token) {
+        return Boolean.TRUE.equals(redisTemplate.hasKey(BLOCKLIST_PREFIX + token));
+    }
+
     /** Ch06-01: Atomic increment for rate limiting counter. */
     public long incrementHits(String key, Duration window) {
         Long count = redisTemplate.opsForValue().increment("ratelimit:" + key);

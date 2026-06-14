@@ -17,6 +17,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Instant;
 
@@ -77,10 +79,27 @@ public class PlaceOrderUseCase {
         order.confirm();
         Order saved = orderRepository.save(order);
 
-        // Ch14-01: Publish domain event
-        eventPublisher.publish(new OrderEvent.OrderPlaced(
-                saved.getId(), customer.getId(),
-                saved.total().amount(), Instant.now()));
+        // Ch14-01: Publish domain event AFTER the transaction commits.
+        //
+        // Why afterCommit, not inline?
+        //   kafkaTemplate.send() is called synchronously here — the message reaches the
+        //   broker and the consumer within milliseconds. If published inside @Transactional,
+        //   OrderKafkaConsumer.updateNeo4jPurchaseGraph() calls orderRepository.findById()
+        //   before this transaction commits, getting an empty Optional and skipping the
+        //   Neo4j graph update entirely.
+        //
+        //   registerSynchronization.afterCommit() runs after the PostgreSQL COMMIT, so
+        //   the order row is guaranteed to be visible when the consumer reads it.
+        final Long orderId     = saved.getId();
+        final Long customerId2 = customer.getId();
+        final java.math.BigDecimal total = saved.total().amount();
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                eventPublisher.publish(new OrderEvent.OrderPlaced(
+                        orderId, customerId2, total, Instant.now()));
+            }
+        });
 
         // Loyalty points: 1 point per dollar
         customer.addLoyaltyPoints(saved.total().amount().intValue());

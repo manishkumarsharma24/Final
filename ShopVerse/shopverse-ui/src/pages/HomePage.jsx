@@ -1,98 +1,104 @@
-import { useNavigate } from 'react-router-dom';
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import ProductCard from '../components/ProductCard';
+import SkeletonCard from '../components/SkeletonCard';
+import { useCart } from '../context/CartContext';
+import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
+import { useSessionId } from '../hooks/useSessionId';
 
 const CATEGORIES = [
-  { key: 'electronics', label: 'Electronics', emoji: '⚡' },
-  { key: 'clothing',    label: 'Clothing',    emoji: '👕' },
-  { key: 'kitchen',     label: 'Kitchen',     emoji: '🍳' },
-  { key: 'furniture',   label: 'Furniture',   emoji: '🪑' },
-  { key: 'accessories', label: 'Accessories', emoji: '👜' },
-  { key: 'lifestyle',   label: 'Lifestyle',   emoji: '✨' },
+  { key: 'electronics', emoji: '💻', label: 'Electronics' },
+  { key: 'furniture',   emoji: '🪑', label: 'Furniture'   },
+  { key: 'kitchen',     emoji: '🍳', label: 'Kitchen'     },
+  { key: 'clothing',    emoji: '👕', label: 'Clothing'    },
+  { key: 'lifestyle',   emoji: '🌿', label: 'Lifestyle'   },
+  { key: 'accessories', emoji: '👜', label: 'Accessories' },
 ];
 
 export default function HomePage() {
   const navigate = useNavigate();
+  const { addToCart } = useCart();
+  const { user } = useAuth();
+  const { add: toast } = useToast();
+  const sessionId = useSessionId();
   const [featured, setFeatured] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.getProducts({ size: 4 }).then(data => {
-      const items = data?.content ?? data ?? [];
-      setFeatured(items.slice(0, 4));
+    api.getProducts({ size: 8 }).then(data => {
+      setFeatured(data?.content ?? data ?? []);
+      setLoading(false);
     });
   }, []);
 
+  const handleAdd = (product) => {
+    addToCart(product);
+    toast(`${product.name} added to cart`, 'success');
+    api.trackAddToCart({ sessionId, productId: product.id, productName: product.name, price: product.price });
+  };
+
+  const handleCategory = (cat) => {
+    navigate(`/products?category=${cat}`);
+  };
+
   return (
-    <div className="page home-page">
+    <div className="page">
       {/* Hero */}
-      <section className="hero">
+      <div className="hero">
         <div className="hero-content">
-          <h1 className="hero-title">
-            Everything you need,<br />
-            <span className="hero-accent">delivered fast.</span>
-          </h1>
-          <p className="hero-subtitle">
-            Discover thousands of products across electronics, fashion, home & more.
+          <span className="hero-badge">🛍️ Full-Stack E-Commerce Demo</span>
+          <h1>Shop the Future <span>Today</span></h1>
+          <p className="hero-sub">
+            Powered by Spring Boot · Kafka · Redis · Elasticsearch · Neo4j · MongoDB · Cassandra
           </p>
           <div className="hero-actions">
-            <button className="btn-primary" onClick={() => navigate('/products')}>
-              Shop Now →
+            <button className="hero-btn-primary" onClick={() => navigate('/products')}>
+              Browse Products
             </button>
-            <button className="btn-ghost" onClick={() => navigate('/products?category=electronics')}>
-              Browse Electronics
+            <button className="hero-btn-ghost" onClick={() => navigate(user ? '/orders' : '/login')}>
+              {user ? 'My Orders' : 'Sign In'}
             </button>
           </div>
         </div>
         <div className="hero-visual">
-          <div className="hero-emoji-grid">
-            {['⚡','📱','🎧','💻','🖥️','⌨️','🖱️','📷'].map((e, i) => (
-              <span key={i} className="hero-emoji" style={{ animationDelay: `${i * 0.15}s` }}>{e}</span>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* Categories */}
-      <section className="section">
-        <h2 className="section-title">Shop by Category</h2>
-        <div className="category-grid">
-          {CATEGORIES.map(cat => (
-            <button
-              key={cat.key}
-              className="category-card"
-              onClick={() => navigate(`/products?category=${cat.key}`)}
-            >
-              <span className="cat-emoji">{cat.emoji}</span>
-              <span className="cat-label">{cat.label}</span>
-            </button>
+          {['💻', '🎧', '🪑', '⌨️'].map(e => (
+            <div key={e} className="hero-emoji-card">{e}</div>
           ))}
         </div>
-      </section>
+      </div>
+
+      {/* Categories */}
+      <h2 className="section-title">Shop by Category</h2>
+      <div className="categories-grid">
+        {CATEGORIES.map(c => (
+          <div key={c.key} className="category-card" onClick={() => handleCategory(c.key)}>
+            <span className="cat-emoji">{c.emoji}</span>
+            <span className="cat-name">{c.label}</span>
+          </div>
+        ))}
+      </div>
 
       {/* Featured */}
-      {featured.length > 0 && (
-        <section className="section">
-          <div className="section-header">
-            <h2 className="section-title">Featured Products</h2>
-            <button className="link-btn" onClick={() => navigate('/products')}>View all →</button>
-          </div>
-          <div className="product-grid">
-            {featured.map(p => <ProductCard key={p.id} product={p} />)}
-          </div>
-        </section>
-      )}
+      <h2 className="section-title">Featured Products</h2>
+      <div className="products-grid">
+        {loading
+          ? Array.from({ length: 8 }, (_, i) => <SkeletonCard key={i} />)
+          : featured.map(p => (
+              <ProductCard key={p.id} product={p} onAdd={handleAdd} />
+            ))
+        }
+      </div>
 
-      {/* Banner */}
-      <section className="promo-banner">
-        <div className="promo-content">
-          <h3>🚀 Free shipping on orders over $50</h3>
-          <p>Use code <strong>SHOPVERSE10</strong> for 10% off your first order</p>
+      {/* Promo */}
+      <div className="promo-banner">
+        <div className="promo-text">
+          <h2>🚀 Free shipping on orders over $100</h2>
+          <p>Use code <strong>SHOPVERSE</strong> at checkout for 10% off your first order</p>
         </div>
-        <button className="btn-primary" onClick={() => navigate('/products')}>
-          Start Shopping
-        </button>
-      </section>
+        <button className="promo-btn" onClick={() => navigate('/products')}>Shop Now</button>
+      </div>
     </div>
   );
 }

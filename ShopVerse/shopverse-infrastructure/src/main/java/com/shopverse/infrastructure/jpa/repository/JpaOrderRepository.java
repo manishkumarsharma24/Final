@@ -13,6 +13,17 @@ public interface JpaOrderRepository extends JpaRepository<OrderEntity, Long> {
 
     List<OrderEntity> findByCustomerIdOrderByCreatedAtDesc(Long customerId);
 
+    /**
+     * Fetch order + items in a single JOIN query.
+     *
+     * Use this instead of findById() whenever items must be accessed outside a
+     * JPA transaction — e.g. from a Kafka consumer. Without JOIN FETCH, calling
+     * getItems() outside a transaction triggers LazyInitializationException because
+     * the Hibernate session is already closed.
+     */
+    @Query("SELECT o FROM OrderEntity o JOIN FETCH o.items WHERE o.id = :id")
+    java.util.Optional<OrderEntity> findWithItemsById(@Param("id") Long id);
+
     List<OrderEntity> findByStatus(String status);
 
     // Ch05-06: Window function via native query — running total per customer
