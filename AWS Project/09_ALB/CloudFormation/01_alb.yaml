@@ -1,0 +1,232 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ShopFlow ALB — Module 9: Application Load Balancer
+  Creates an ALB in the public subnets to route HTTP/HTTPS traffic
+  to the ShopVerse EC2 instance (port 8080) in the private subnet.
+  Includes a Target Group with health checks on /actuator/health.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: shopflow
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, production]
+
+  VpcId:
+    Type: String
+    Description: >
+      VPC ID for the ShopFlow VPC.
+      Run: aws ec2 describe-vpcs --filters "Name=tag:Name,Values=*shopflow*"
+           --query "Vpcs[0].VpcId" --output text --region ap-south-1
+
+  PublicSubnet1a:
+    Type: String
+    Description: >
+      First public subnet ID (AZ 1a).
+      Run: aws ec2 describe-subnets --filters "Name=tag:Name,Values=*shopflow*pub*1a*"
+           --query "Subnets[0].SubnetId" --output text --region ap-south-1
+
+  PublicSubnet1b:
+    Type: String
+    Description: >
+      Second public subnet ID (AZ 1b) — ALB requires subnets in 2 AZs.
+      Run: aws ec2 describe-subnets --filters "Name=tag:Name,Values=*shopflow*pub*1b*"
+           --query "Subnets[0].SubnetId" --output text --region ap-south-1
+
+  ALBSecurityGroupId:
+    Type: String
+    Description: >
+      Security Group ID for the ALB (shopflow-alb-sg).
+      Run: aws ec2 describe-security-groups --filters "Name=group-name,Values=*shopflow*alb*"
+           --query "SecurityGroups[0].GroupId" --output text --region ap-south-1
+
+  EC2InstanceId:
+    Type: String
+    Description: >
+      EC2 Instance ID to register in the Target Group (shopflow-shopverse-dev).
+      Run: aws ec2 describe-instances --filters "Name=tag:Name,Values=shopflow-shopverse-dev"
+           "Name=instance-state-name,Values=running"
+           --query "Reservations[0].Instances[0].InstanceId" --output text --region ap-south-1
+
+# ─────────────────────────────────────────────────────────────
+# CONCEPT: Application Load Balancer (ALB)
+#
+# The ALB sits in the PUBLIC subnets and accepts requests from
+# the internet (HTTP port 80). It forwards traffic to EC2/ECS
+# targets in the PRIVATE subnets (port 8080).
+#
+# Traffic flow:
+#   User → Internet → ALB (public subnet, port 80)
+#            → Target Group → EC2 instance (private subnet, port 8080)
+#
+# KEY COMPONENTS:
+#
+#  1. Load Balancer:
+#     The actual ALB resource. Needs at least 2 public subnets in
+#     different AZs so it can stay available if one AZ has problems.
+#
+#  2. Target Group:
+#     A group of EC2 instances (or ECS tasks) that the ALB sends
+#     traffic to. The ALB performs health checks on each target —
+#     if a target fails health checks, ALB stops sending it traffic.
+#
+#  3. Listener:
+#     A rule on the ALB: "listen on port 80, forward to Target Group."
+#     You can have multiple listeners (HTTP, HTTPS) on one ALB.
+#
+#  4. Health Checks:
+#     ALB periodically calls /actuator/health on each target.
+#     Spring Boot Actuator returns {"status":"UP"} when healthy.
+#     If the response is not 200, ALB marks the target Unhealthy
+#     and stops routing traffic to it.
+#
+#  5. HTTP vs HTTPS:
+#     This template uses HTTP (port 80) for simplicity in learning.
+#     For production: add an HTTPS listener on port 443 with an
+#     ACM certificate and redirect HTTP → HTTPS with a 301.
+#
+#  6. ALB vs NLB vs CLB:
+#     - ALB (Layer 7): understands HTTP, routes by path/header.
+#       Best for web apps. What we use.
+#     - NLB (Layer 4): raw TCP/UDP. Best for low-latency or non-HTTP.
+#     - CLB (Classic): legacy. Don't use for new projects.
+# ─────────────────────────────────────────────────────────────
+
+Resources:
+
+  # ── Target Group ────────────────────────────────────────────────────────────
+  # Defines WHERE traffic goes (EC2 port 8080) and HOW to check health.
+  # EC2 instances are registered to this group after ALB is created.
+  ShopVerseTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${ProjectName}-tg-${Environment}"
+      Protocol: HTTP
+      Port: 8080
+      VpcId: !Ref VpcId
+      TargetType: instance   # "instance" for EC2; "ip" for ECS Fargate; "lambda" for Lambda
+
+      # Health check: ALB polls this path every 30 seconds.
+      # Spring Boot Actuator endpoint — returns 200 {"status":"UP"} when healthy.
+      HealthCheckEnabled: true
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /actuator/health
+      HealthCheckPort: "8080"
+      HealthCheckIntervalSeconds: 30      # Check every 30 seconds
+      HealthCheckTimeoutSeconds: 10       # Wait up to 10 seconds for response
+      HealthyThresholdCount: 2           # 2 consecutive successes → Healthy
+      UnhealthyThresholdCount: 3         # 3 consecutive failures → Unhealthy
+
+      # HTTP status codes that count as "healthy" response.
+      # Spring Boot Actuator returns 200 when UP.
+      Matcher:
+        HttpCode: "200"
+
+      # Stickiness: disabled for stateless JWT auth.
+      # ShopVerse is stateless (no HTTP session) so any instance can
+      # serve any request. No need for sticky sessions.
+      TargetGroupAttributes:
+        - Key: stickiness.enabled
+          Value: "false"
+        - Key: deregistration_delay.timeout_seconds
+          Value: "30"  # Wait 30s after removing target before stopping traffic
+
+      # Register the EC2 instance directly in the Target Group.
+      Targets:
+        - Id: !Ref EC2InstanceId
+          Port: 8080
+
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-tg-${Environment}"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── Application Load Balancer ───────────────────────────────────────────────
+  ShopVerseALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${ProjectName}-alb-${Environment}"
+      Type: application   # ALB (Layer 7)
+      Scheme: internet-facing   # Public internet entry point
+      IpAddressType: ipv4
+
+      # Place ALB in BOTH public subnets for high availability.
+      # Even with one EC2 instance, the ALB itself is HA across 2 AZs.
+      Subnets:
+        - !Ref PublicSubnet1a
+        - !Ref PublicSubnet1b
+
+      SecurityGroups:
+        - !Ref ALBSecurityGroupId  # Port 80/443 from internet (Module 2)
+
+      # Access logs: ALB can write one log entry per request to S3.
+      # Useful for debugging and traffic analysis.
+      # Disabled for dev to avoid S3 costs; enable for production.
+      LoadBalancerAttributes:
+        - Key: access_logs.s3.enabled
+          Value: "false"
+        - Key: idle_timeout.timeout_seconds
+          Value: "60"   # Close idle connections after 60 seconds
+        - Key: routing.http2.enabled
+          Value: "true"  # HTTP/2 support for better browser performance
+
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-alb-${Environment}"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── HTTP Listener ────────────────────────────────────────────────────────────
+  # Listens on port 80 and forwards all requests to the Target Group.
+  # For production: change this to redirect to HTTPS and add a separate
+  # HTTPS listener (port 443) with an ACM certificate.
+  HTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ShopVerseALB
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        # Forward all traffic to the Target Group.
+        # More complex routing rules (path-based, header-based) can be
+        # added as additional listener rules.
+        - Type: forward
+          TargetGroupArn: !Ref ShopVerseTargetGroup
+
+
+Outputs:
+
+  ALBDNSName:
+    Description: >
+      ALB public DNS name. Use this to test the application.
+      Example: curl http://<ALBDNSName>/api/products
+      For production: create a CNAME record pointing your domain here.
+    Value: !GetAtt ShopVerseALB.DNSName
+    Export:
+      Name: !Sub "${ProjectName}-alb-dns"
+
+  ALBArn:
+    Description: ALB ARN (used by other stacks, e.g., WAF)
+    Value: !Ref ShopVerseALB
+    Export:
+      Name: !Sub "${ProjectName}-alb-arn"
+
+  TargetGroupArn:
+    Description: Target Group ARN (used by ECS service in Module 11)
+    Value: !Ref ShopVerseTargetGroup
+    Export:
+      Name: !Sub "${ProjectName}-tg-arn"
+
+  HTTPListenerArn:
+    Description: HTTP Listener ARN (used for additional listener rules)
+    Value: !Ref HTTPListener
+    Export:
+      Name: !Sub "${ProjectName}-alb-http-listener-arn"

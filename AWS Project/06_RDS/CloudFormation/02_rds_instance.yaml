@@ -1,0 +1,222 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ShopFlow RDS — Module 6b: MySQL DB Instance
+  Creates a Single-AZ MySQL 8.0 RDS instance in the private subnets.
+  Uses the DB Subnet Group from 01_rds_subnet_group.yaml and
+  credentials from Secrets Manager (Module 4).
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: shopflow
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, production]
+
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.micro
+    Description: >
+      RDS instance size. db.t3.micro is free-tier eligible (750 hours/month).
+      For production use db.r6g.large or larger.
+    AllowedValues:
+      - db.t3.micro    # Free tier — 2 vCPU, 1 GB RAM
+      - db.t3.small    # 2 vCPU, 2 GB RAM
+      - db.t3.medium   # 2 vCPU, 4 GB RAM
+
+  AllocatedStorageGB:
+    Type: Number
+    Default: 20
+    MinValue: 20
+    MaxValue: 100
+    Description: Initial storage in GB. 20 GB minimum for free tier. RDS can auto-scale storage up.
+
+# ─────────────────────────────────────────────────────────────
+# CONCEPT: Amazon RDS
+#
+# RDS (Relational Database Service) manages a MySQL server for you.
+# AWS handles: installation, patching, backups, and failover.
+# You handle: schema design, queries, and connection config.
+#
+# KEY DECISIONS IN THIS TEMPLATE:
+#
+#  1. Engine: MySQL 8.0
+#     ShopVerse uses MySQL locally; same engine on AWS.
+#     Spring Boot connects via JDBC: exactly the same as local.
+#     Only the hostname (endpoint) changes.
+#
+#  2. Single-AZ vs Multi-AZ:
+#     Single-AZ (this template): one DB instance in one AZ.
+#     Multi-AZ: RDS automatically maintains a standby replica in
+#     a second AZ. If the primary fails, RDS promotes the standby
+#     in ~60 seconds (automatic failover). We use Single-AZ for
+#     learning to keep costs low (~$12/month for t3.micro).
+#     Enable Multi-AZ for production with one checkbox.
+#
+#  3. Password from Secrets Manager:
+#     We reference the secret ARN from Module 4 directly.
+#     RDS reads the password from the secret without it appearing
+#     anywhere in CloudFormation or the AWS Console.
+#     The secret ARN format: {{resolve:secretsmanager:<arn>:SecretString:password}}
+#
+#  4. Automated Backups:
+#     RDS takes a daily snapshot of the entire DB during the
+#     backup window. We set 7-day retention — 7 snapshots kept.
+#     You can restore to any point-in-time within the retention window.
+#
+#  5. Storage Auto Scaling:
+#     MaxAllocatedStorage enables storage autoscaling — if the DB
+#     fills up past 90% of allocated storage, RDS automatically
+#     adds more. No downtime, no manual intervention.
+#
+#  6. Parameter Group:
+#     Controls MySQL server-level settings (e.g., max_connections,
+#     slow_query_log, innodb_buffer_pool_size). We use the default
+#     group for learning, but create a custom one for production tuning.
+#
+#  7. Deletion Protection:
+#     Prevents accidental deletion via CloudFormation or console.
+#     Set to false for dev (so we can tear down easily).
+#     Always set to true for production.
+# ─────────────────────────────────────────────────────────────
+
+Resources:
+
+  # ── MySQL Parameter Group ───────────────────────────────────────────────────
+  # Custom parameter group to tune MySQL for ShopVerse workload.
+  # ShopVerse is a transaction-heavy OLTP app (many small reads/writes).
+  DBParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      DBParameterGroupName: !Sub "${ProjectName}-mysql8-params"
+      Description: "MySQL 8.0 parameters tuned for ShopVerse OLTP workload"
+      Family: mysql8.0
+      Parameters:
+        # Slow query log: log any query taking longer than 1 second.
+        # These logs appear in CloudWatch Logs for analysis.
+        slow_query_log: "1"
+        long_query_time: "1"
+
+        # Log queries that don't use indexes — helps spot missing indexes.
+        log_queries_not_using_indexes: "1"
+
+        # InnoDB buffer pool: caches frequently accessed pages in RAM.
+        # 70% of available RAM is the standard recommendation.
+        # For t3.micro (1 GB RAM): 0.7 GB = 734003200 bytes
+        innodb_buffer_pool_size: "734003200"
+
+        # Max connections: limits concurrent DB connections.
+        # ShopVerse uses HikariCP connection pool (default 10 connections).
+        # Set to 100 to support multiple app instances without overloading.
+        max_connections: "100"
+
+        # Transaction isolation level: REPEATABLE-READ (MySQL default).
+        # ShopVerse's CQRS pattern relies on consistent reads.
+        transaction_isolation: "READ-COMMITTED"
+
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── RDS MySQL Instance ───────────────────────────────────────────────────────
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot  # On stack delete: take a final snapshot before deleting
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub "${ProjectName}-db-${Environment}"
+      DBInstanceClass: !Ref DBInstanceClass
+      Engine: mysql
+      EngineVersion: "8.0"
+
+      # Master credentials from Secrets Manager (Module 4).
+      # This is the CloudFormation dynamic reference syntax.
+      # CloudFormation resolves this at deploy time — the password
+      # never appears in the template or CloudFormation events.
+      MasterUsername: !Sub "{{resolve:secretsmanager:/${ProjectName}/db/master:SecretString:username}}"
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:/${ProjectName}/db/master:SecretString:password}}"
+
+      # Database name — Flyway will create tables in this schema.
+      DBName: "shopverse"
+
+      # Storage
+      StorageType: gp3          # General Purpose SSD v3 — better IOPS than gp2
+      AllocatedStorage: !Ref AllocatedStorageGB
+      MaxAllocatedStorage: 100  # Storage autoscaling ceiling: grow up to 100 GB automatically
+
+      # Performance Insights: free for 7-day retention.
+      # Shows which queries are consuming the most DB time.
+      EnablePerformanceInsights: true
+      PerformanceInsightsRetentionPeriod: 7
+
+      # Network placement
+      DBSubnetGroupName: !ImportValue shopflow-db-subnet-group
+      VPCSecurityGroups:
+        - !ImportValue shopflow-rds-sg-id  # From Module 2 (VPC security groups)
+      PubliclyAccessible: false  # NEVER true — DB only accessible from within the VPC
+
+      # Parameter group with our custom MySQL settings
+      DBParameterGroupName: !Ref DBParameterGroup
+
+      # Automated backups
+      BackupRetentionPeriod: 7        # Keep 7 days of backups
+      PreferredBackupWindow: "02:00-03:00"    # 2-3 AM UTC daily backup window
+      PreferredMaintenanceWindow: "sun:04:00-sun:05:00"  # Sunday 4 AM UTC
+
+      # Single-AZ (not Multi-AZ) for cost savings in dev.
+      # Set MultiAZ: true for production.
+      MultiAZ: false
+
+      # Encryption at rest (free, recommended always)
+      StorageEncrypted: true
+
+      # CloudWatch log exports: publish these MySQL logs to CloudWatch.
+      # "slowquery" exports help identify slow queries after launch.
+      EnableCloudwatchLogsExports:
+        - error
+        - slowquery
+        - general
+
+      # Minor version auto-upgrade (e.g., 8.0.32 → 8.0.35).
+      # Applied during the maintenance window. Safe for patch releases.
+      AutoMinorVersionUpgrade: true
+
+      # Deletion protection: off for dev (easy teardown), ON for production.
+      DeletionProtection: false
+
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-db-${Environment}"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+# ─────────────────────────────────────────────────────────────
+# OUTPUTS
+# ─────────────────────────────────────────────────────────────
+Outputs:
+
+  DBEndpoint:
+    Description: >
+      RDS MySQL endpoint hostname. COPY THIS VALUE and update SSM parameter
+      /shopflow/dev/db/endpoint using the CLI command in the deploy guide.
+    Value: !GetAtt DBInstance.Endpoint.Address
+    Export:
+      Name: !Sub "${ProjectName}-db-endpoint"
+
+  DBPort:
+    Description: RDS MySQL port
+    Value: !GetAtt DBInstance.Endpoint.Port
+    Export:
+      Name: !Sub "${ProjectName}-db-port"
+
+  DBInstanceId:
+    Description: RDS DB instance identifier
+    Value: !Ref DBInstance
+    Export:
+      Name: !Sub "${ProjectName}-db-instance-id"

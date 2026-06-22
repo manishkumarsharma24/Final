@@ -1,0 +1,79 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ShopFlow IAM - Step 2: Groups
+  Creates all 4 IAM groups and attaches policies.
+  Deploy AFTER 01_iam_policies.yaml
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: shopflow
+    Description: Project name used as prefix for all resources
+
+Resources:
+
+  # ── GROUP 1: DevOps ────────────────────────────────────────────────────────
+  DevOpsGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: !Sub "${ProjectName}-devops"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+        - !ImportValue
+          Fn::Sub: "${ProjectName}-devops-policy-arn"
+
+  # ── GROUP 2: Senior Developers ─────────────────────────────────────────────
+  SeniorDevelopersGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: !Sub "${ProjectName}-senior-devs"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/PowerUserAccess
+        - !ImportValue
+          Fn::Sub: "${ProjectName}-seniordev-policy-arn"
+
+  # ── GROUP 3: Developers ────────────────────────────────────────────────────
+  DevelopersGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: !Sub "${ProjectName}-developers"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/PowerUserAccess
+        - !ImportValue
+          Fn::Sub: "${ProjectName}-developer-policy-arn"
+
+  # ── GROUP 4: Read Only ─────────────────────────────────────────────────────
+  ReadOnlyGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: !Sub "${ProjectName}-readonly"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/ReadOnlyAccess
+        - !ImportValue
+          Fn::Sub: "${ProjectName}-readonly-policy-arn"
+
+Outputs:
+
+  DevOpsGroupName:
+    Description: Name of the DevOps group
+    Value: !Ref DevOpsGroup
+    Export:
+      Name: !Sub "${ProjectName}-devops-group"
+
+  SeniorDevsGroupName:
+    Description: Name of the Senior Developers group
+    Value: !Ref SeniorDevelopersGroup
+    Export:
+      Name: !Sub "${ProjectName}-seniordevs-group"
+
+  DevelopersGroupName:
+    Description: Name of the Developers group
+    Value: !Ref DevelopersGroup
+    Export:
+      Name: !Sub "${ProjectName}-developers-group"
+
+  ReadOnlyGroupName:
+    Description: Name of the Read Only group
+    Value: !Ref ReadOnlyGroup
+    Export:
+      Name: !Sub "${ProjectName}-readonly-group"

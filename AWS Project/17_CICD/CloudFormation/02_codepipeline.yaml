@@ -1,0 +1,173 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ShopFlow CI/CD — Module 18: CodePipeline
+  Orchestrates: Source (GitHub) → Build (CodeBuild) → Deploy (ECS).
+  Every push to the main branch triggers a full deploy automatically.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: shopflow
+
+  Environment:
+    Type: String
+    Default: dev
+
+  GitHubOwner:
+    Type: String
+    Description: GitHub username or organisation
+
+  GitHubRepo:
+    Type: String
+    Default: ShopVerse
+
+  GitHubBranch:
+    Type: String
+    Default: main
+
+  GitHubConnectionArn:
+    Type: String
+    Description: >
+      ARN of the CodeStar Connection to GitHub.
+      Create manually: AWS Console → CodePipeline → Settings → Connections → Create connection.
+      Must be in AVAILABLE status before deploying this stack.
+
+  CICDRoleArn:
+    Type: String
+    Description: >
+      ARN of the CI/CD IAM role (shopflow-cicd-role).
+      Run: aws iam get-role --role-name shopflow-cicd-role --query "Role.Arn" --output text
+
+  CICDArtifactsBucket:
+    Type: String
+    Description: >
+      Name of the S3 bucket for CI/CD artifacts.
+      Run: aws s3 ls | grep shopflow-cicd
+
+  CodeBuildProjectName:
+    Type: String
+    Description: >
+      Name of the CodeBuild project created in the previous stack.
+      Value: shopflow-build-dev (or check CloudFormation → shopflow-codebuild → Outputs)
+
+  ECSClusterName:
+    Type: String
+    Description: >
+      Name of the ECS cluster.
+      Run: aws ecs list-clusters --region ap-south-1 --query "clusterArns" --output table
+      Format: shopflow-cluster (just the name, not the full ARN)
+
+  ECSServiceName:
+    Type: String
+    Description: >
+      Name of the ECS service.
+      Run: aws ecs list-services --cluster shopflow-cluster --region ap-south-1
+      Format: shopflow-web-service (just the name)
+
+# ─────────────────────────────────────────────────────────────
+# CONCEPT: AWS CodePipeline
+#
+# CodePipeline orchestrates a multi-stage CI/CD workflow.
+# Each stage runs sequentially — if one fails, the pipeline stops.
+#
+# SHOPVERSE PIPELINE STAGES:
+#
+#   Stage 1 — Source:
+#     Detects a git push to the main branch via CodeStar Connection.
+#     Downloads the source code ZIP to S3 (artifact store).
+#
+#   Stage 2 — Build:
+#     Passes the source ZIP to CodeBuild.
+#     CodeBuild: mvn package → docker build → ECR push.
+#     Output: imagedefinitions.json (tells ECS which image to deploy).
+#
+#   Stage 3 — Deploy:
+#     ECS rolling update using the new Docker image.
+#     New task starts with new image → health check passes → old task stops.
+#     Zero downtime if minimumHealthyPercent=100.
+#
+# FREE TIER: 1 free active pipeline per month — forever.
+# ─────────────────────────────────────────────────────────────
+
+Resources:
+
+  ShopVersePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub "${ProjectName}-pipeline-${Environment}"
+      RoleArn: !Ref CICDRoleArn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref CICDArtifactsBucket
+
+      Stages:
+
+        # ── Stage 1: SOURCE ─────────────────────────────────────────────────
+        # Watches the main branch. On every push, downloads source to S3.
+        - Name: Source
+          Actions:
+            - Name: GitHubSource
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: "1"
+              Configuration:
+                ConnectionArn: !Ref GitHubConnectionArn
+                FullRepositoryId: !Sub "${GitHubOwner}/${GitHubRepo}"
+                BranchName: !Ref GitHubBranch
+                OutputArtifactFormat: CODE_ZIP
+                DetectChanges: true     # Auto-trigger on git push
+              OutputArtifacts:
+                - Name: SourceOutput
+
+        # ── Stage 2: BUILD ──────────────────────────────────────────────────
+        # Passes source code to CodeBuild.
+        # CodeBuild runs buildspec (mvn + docker + ECR push).
+        # Output: imagedefinitions.json used by Stage 3.
+        - Name: Build
+          Actions:
+            - Name: MavenAndDockerBuild
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref CodeBuildProjectName
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+              RunOrder: 1
+
+        # ── Stage 3: DEPLOY ─────────────────────────────────────────────────
+        # ECS rolling update.
+        # Reads imagedefinitions.json → updates task definition → rolling replace.
+        # New task: health check → pass → old task: drain → stop.
+        - Name: Deploy
+          Actions:
+            - Name: ECSRollingDeploy
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: ECS
+                Version: "1"
+              Configuration:
+                ClusterName: !Ref ECSClusterName
+                ServiceName: !Ref ECSServiceName
+                FileName: imagedefinitions.json
+              InputArtifacts:
+                - Name: BuildOutput
+              RunOrder: 1
+
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  PipelineUrl:
+    Description: Direct link to the pipeline in AWS Console
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/codesuite/codepipeline/pipelines/${ProjectName}-pipeline-${Environment}/view"

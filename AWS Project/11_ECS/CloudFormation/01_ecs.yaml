@@ -1,0 +1,261 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ShopFlow ECS — Module 11: ECS Fargate Cluster + Service
+  Runs ShopVerse as a containerised service on AWS Fargate.
+  Fargate = no EC2 to manage — AWS runs the containers.
+  This is an ALTERNATIVE to the EC2 approach in Module 8.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: shopflow
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, production]
+
+  ImageUri:
+    Type: String
+    Description: >
+      Full ECR image URI including tag.
+      Format: <account>.dkr.ecr.ap-south-1.amazonaws.com/shopflow-shopverse:v1.0
+      Get this from the ECR module (Module 10) Outputs.
+
+  DesiredCount:
+    Type: Number
+    Default: 1
+    Description: Number of container instances to run (1 for dev, 2+ for production)
+
+# ─────────────────────────────────────────────────────────────
+# CONCEPT: ECS Fargate
+#
+# ECS (Elastic Container Service) runs Docker containers.
+# Fargate is the "serverless" compute mode — you define how much
+# CPU and RAM the container needs, and AWS handles the underlying VM.
+#
+# COMPONENTS:
+#
+#  1. ECS CLUSTER:
+#     A logical grouping of tasks and services. Think of it as the
+#     "namespace" for your containerised workloads. With Fargate,
+#     the cluster has no EC2 instances — AWS manages the compute.
+#
+#  2. TASK DEFINITION:
+#     The blueprint for your container — like a docker-compose.yml.
+#     Defines: Docker image URI, CPU/RAM, environment variables,
+#     secrets (from Secrets Manager), port mappings, and log config.
+#     Versioned: each update creates a new revision. ECS stores all
+#     revisions so you can roll back instantly.
+#
+#  3. ECS SERVICE:
+#     Ensures the desired number of tasks is always running.
+#     If a task crashes, the Service launches a replacement.
+#     Services can also integrate with ALB for traffic routing.
+#
+#  4. TASK vs SERVICE:
+#     - Task: a one-shot container run (e.g., a database migration job)
+#     - Service: a long-running set of containers (e.g., the web app)
+#     ShopVerse runs as a Service.
+#
+#  5. SECRETS IN TASK DEFINITION:
+#     ECS injects secrets from Secrets Manager as environment variables.
+#     The "secrets" section maps: env var name → Secrets Manager ARN + JSON key.
+#     Example: DB_PASS → /${ProjectName}/db/app:password
+#     The task execution role (shopflow-ecs-execution-role) handles the API call.
+#
+#  6. CPU AND MEMORY:
+#     Fargate uses vCPU units: 256 units = 0.25 vCPU = 256 millicores.
+#     For Spring Boot: minimum 512 CPU (0.5 vCPU), 1024 MB RAM.
+#     ShopVerse JVM options: -Xms256m -Xmx512m (512 MB heap + overhead).
+# ─────────────────────────────────────────────────────────────
+
+Resources:
+
+  # ── CloudWatch Log Group for ECS ────────────────────────────────────────────
+  # ECS task logs go here. Visible in CloudWatch Console.
+  # awslogs driver streams stdout/stderr from the container.
+  ECSLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/${ProjectName}-shopverse-${Environment}"
+      RetentionInDays: 30
+
+  # ── ECS Cluster ─────────────────────────────────────────────────────────────
+  ShopVerseCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "${ProjectName}-cluster-${Environment}"
+      # Container Insights: CloudWatch metrics for your cluster
+      # (CPU, memory, network per service). Small extra cost.
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── Task Definition ──────────────────────────────────────────────────────────
+  ShopVerseTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${ProjectName}-shopverse-${Environment}"
+      # Fargate requires awsvpc network mode — each task gets its own ENI
+      # (Elastic Network Interface) with its own IP in the VPC.
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      # CPU and memory for the TASK (sum of all containers in the task).
+      # 512 CPU units = 0.5 vCPU, 1024 MB = 1 GB RAM
+      Cpu: "512"
+      Memory: "1024"
+      # Execution role: ECS uses this to pull the image from ECR and
+      # inject secrets from Secrets Manager. Already created in Module 1.
+      ExecutionRoleArn: !ImportValue shopflow-ecs-execution-role-arn
+      # Task role: the container uses this for any AWS SDK calls (S3, SSM, etc.)
+      TaskRoleArn: !ImportValue shopflow-ecs-task-role-arn
+
+      ContainerDefinitions:
+        - Name: shopverse
+          Image: !Ref ImageUri
+          Essential: true
+          # Port mapping: container listens on 8080, task exposes 8080.
+          # With awsvpc mode, no host port needed.
+          PortMappings:
+            - ContainerPort: 8080
+              Protocol: tcp
+
+          # ── Environment Variables (non-sensitive) ─────────────────────────
+          # Fetch from SSM using ECS environment injection.
+          # Format: valueFrom: "<ssm-parameter-arn>"
+          # OR for simplicity here, use direct SSM parameter names.
+          Environment:
+            - Name: SPRING_PROFILES_ACTIVE
+              Value: !Ref Environment
+            - Name: SERVER_PORT
+              Value: "8080"
+            - Name: AWS_DEFAULT_REGION
+              Value: !Ref AWS::Region
+
+          # ── Secrets (sensitive values from Secrets Manager) ───────────────
+          # ECS calls GetSecretValue and injects as env vars.
+          # Format: "<secret-arn>:<json-key>::"
+          # The trailing "::" is required by ECS syntax.
+          Secrets:
+            - Name: DB_HOST
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${Environment}/db/endpoint"
+            - Name: DB_PORT
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${Environment}/db/port"
+            - Name: DB_NAME
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${Environment}/db/name"
+            - Name: REDIS_HOST
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${Environment}/redis/endpoint"
+            - Name: REDIS_PORT
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${Environment}/redis/port"
+            - Name: DB_USER
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:/${ProjectName}/db/app:username::"
+            - Name: DB_PASS
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:/${ProjectName}/db/app:password::"
+            - Name: JWT_SECRET
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:/${ProjectName}/app/jwt-secret:jwt_secret::"
+            - Name: REDIS_AUTH_TOKEN
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:/${ProjectName}/app/redis-auth:auth_token::"
+
+          # ── Health Check ──────────────────────────────────────────────────
+          # ECS polls this to decide if the container is healthy.
+          # Separate from ALB health check — both run independently.
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - "curl -f http://localhost:8080/actuator/health || exit 1"
+            Interval: 30
+            Timeout: 10
+            Retries: 3
+            StartPeriod: 60   # Grace period: Spring Boot needs ~30-60s to start
+
+          # JVM tuning via environment (overrides defaults in the JAR).
+          # 512 MB heap fits in the 1 GB task memory allocation.
+          LinuxParameters:
+            InitProcessEnabled: true  # Proper PID 1 for signal handling
+
+          # ── Logging ───────────────────────────────────────────────────────
+          # awslogs driver: streams stdout/stderr to CloudWatch Logs.
+          # No CloudWatch agent needed — ECS handles it.
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ECSLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: shopverse
+
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── ECS Service ──────────────────────────────────────────────────────────────
+  ShopVerseService:
+    Type: AWS::ECS::Service
+    DependsOn: ECSLogGroup   # Log group must exist before tasks start logging
+    Properties:
+      ServiceName: !Sub "${ProjectName}-shopverse-svc-${Environment}"
+      Cluster: !Ref ShopVerseCluster
+      TaskDefinition: !Ref ShopVerseTaskDefinition
+      LaunchType: FARGATE
+      DesiredCount: !Ref DesiredCount
+      # Deployment config: rolling update with no downtime.
+      # MinimumHealthyPercent: at least 100% of desired tasks must be healthy
+      # during deployment (for DesiredCount=1, this means: launch new task
+      # first, confirm healthy, THEN stop old task).
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200   # Allow 2x tasks during rolling deploy
+        DeploymentCircuitBreaker:
+          Enable: true      # Automatic rollback if new tasks fail health checks
+          Rollback: true
+
+      # Network: place tasks in private subnets.
+      # Each Fargate task gets its own IP address in the VPC.
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets:
+            - !ImportValue shopflow-prv-subnet-1a
+            - !ImportValue shopflow-prv-subnet-1b
+          SecurityGroups:
+            - !ImportValue shopflow-ec2-sg-id  # Port 8080 from ALB-SG
+          AssignPublicIp: DISABLED  # Private subnet — no public IP
+
+      # ALB integration: register this service with the Target Group.
+      # ALB routes traffic to healthy task IPs.
+      LoadBalancers:
+        - ContainerName: shopverse
+          ContainerPort: 8080
+          TargetGroupArn: !ImportValue shopflow-tg-arn
+
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  ClusterName:
+    Description: ECS cluster name
+    Value: !Ref ShopVerseCluster
+    Export:
+      Name: !Sub "${ProjectName}-ecs-cluster-name"
+
+  ServiceName:
+    Description: ECS service name
+    Value: !GetAtt ShopVerseService.Name
+    Export:
+      Name: !Sub "${ProjectName}-ecs-service-name"
+
+  TaskDefinitionArn:
+    Description: Task definition ARN (use in CI/CD for blue/green deploys)
+    Value: !Ref ShopVerseTaskDefinition
+    Export:
+      Name: !Sub "${ProjectName}-ecs-task-def-arn"

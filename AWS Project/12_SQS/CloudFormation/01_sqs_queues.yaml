@@ -1,0 +1,333 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ShopFlow SQS — Module 12: Message Queues
+  Creates SQS queues for async processing: notifications, payments, webhooks.
+  Each queue has a Dead-Letter Queue (DLQ) for failed messages.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: shopflow
+
+  Environment:
+    Type: String
+    Default: dev
+
+# ─────────────────────────────────────────────────────────────
+# CONCEPT: Amazon SQS (Simple Queue Service)
+#
+# SQS is a managed message queue. A producer puts a message in
+# the queue; a consumer retrieves and processes it. If the
+# consumer crashes mid-processing, the message becomes visible
+# again and is retried. This is the AWS replacement for RabbitMQ.
+#
+# KEY CONCEPTS:
+#
+#  1. STANDARD vs FIFO QUEUE:
+#     - Standard: at-least-once delivery, best-effort ordering.
+#       Highest throughput. Use for most tasks.
+#     - FIFO: exactly-once delivery, strict ordering.
+#       Lower throughput (3000 msg/sec). Use for payments.
+#     ShopVerse: Standard for notifications, FIFO for payments.
+#
+#  2. VISIBILITY TIMEOUT:
+#     When a consumer reads a message, SQS hides it for
+#     VisibilityTimeout seconds. If the consumer processes it
+#     and deletes it within that window → done.
+#     If the consumer crashes → message reappears after timeout.
+#     Set this to longer than your processing time + buffer.
+#
+#  3. DEAD-LETTER QUEUE (DLQ):
+#     If a message is received N times but never deleted
+#     (processing keeps failing), SQS moves it to the DLQ.
+#     The DLQ holds failed messages for debugging.
+#     Alerts on DLQ messages = alert on processing failures.
+#
+#  4. RETENTION PERIOD:
+#     How long SQS keeps a message if no consumer reads it.
+#     Max 14 days. After retention period, message is deleted.
+#     Set main queues to 4 days; DLQs to 14 days (more time to debug).
+#
+#  5. vs KAFKA (local ShopVerse):
+#     - Kafka (local): persistent log, consumer groups, replay.
+#     - SQS (AWS): simpler, no consumer groups to manage,
+#       messages deleted after processing. Better for fire-and-forget.
+#     ShopVerse can use SQS for the same jobs RabbitMQ handles locally.
+# ─────────────────────────────────────────────────────────────
+
+Resources:
+
+  # ═══════════════════════════════════════════════════════════
+  # NOTIFICATION QUEUES
+  # ═══════════════════════════════════════════════════════════
+
+  # DLQ first — main queue references it
+  NotificationDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-notification-dlq-${Environment}"
+      MessageRetentionPeriod: 1209600  # 14 days — keep failed messages for debugging
+      SqsManagedSseEnabled: true       # Server-side encryption (free)
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: DLQ-Notifications
+
+  # Main notification queue: order confirmations, shipping updates, etc.
+  # Lambda (Module 14) triggers from this queue to send emails via SendGrid.
+  NotificationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-notifications-${Environment}"
+      VisibilityTimeout: 120          # 2 minutes — Lambda timeout is 60s
+      MessageRetentionPeriod: 345600  # 4 days
+      SqsManagedSseEnabled: true
+      # Redrive policy: send to DLQ after 3 failed processing attempts
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt NotificationDLQ.Arn
+        maxReceiveCount: 3
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: EmailNotifications
+
+  # ═══════════════════════════════════════════════════════════
+  # PAYMENT QUEUES (FIFO — for exactly-once processing)
+  # ═══════════════════════════════════════════════════════════
+
+  PaymentDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-payment-dlq-${Environment}.fifo"  # .fifo suffix required
+      FifoQueue: true
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: DLQ-Payments
+
+  # Payment callbacks: Stripe/PayPal webhook events.
+  # FIFO ensures each payment event is processed exactly once and in order.
+  # Lambda (Module 14) processes from this queue.
+  PaymentQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-payments-${Environment}.fifo"  # .fifo suffix required
+      FifoQueue: true
+      ContentBasedDeduplication: true  # Deduplicate identical messages within 5 minutes
+      VisibilityTimeout: 120
+      MessageRetentionPeriod: 345600
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt PaymentDLQ.Arn
+        maxReceiveCount: 3
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: PaymentCallbacks
+
+  # ═══════════════════════════════════════════════════════════
+  # ORDER EVENT QUEUE
+  # ═══════════════════════════════════════════════════════════
+
+  OrderEventDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-order-events-dlq-${Environment}"
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Order events: order placed, order shipped, order cancelled.
+  # These are the same events Kafka handles locally.
+  # ECS service (ShopVerse) produces; Lambda or another service consumes.
+  OrderEventQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-order-events-${Environment}"
+      VisibilityTimeout: 60
+      MessageRetentionPeriod: 345600
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt OrderEventDLQ.Arn
+        maxReceiveCount: 5   # Orders are important — try 5 times before DLQ
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: OrderEvents
+
+  # ═══════════════════════════════════════════════════════════
+  # INVENTORY UPDATE QUEUE
+  # ═══════════════════════════════════════════════════════════
+
+  InventoryUpdateDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-inventory-update-dlq-${Environment}"
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: DLQ-InventoryUpdate
+
+  # Stock decrement events. When an order is placed, InventoryService.java
+  # must reduce stock counts for each item. This queue decouples that from
+  # the main order flow — if inventory update fails, order is still saved.
+  # maxReceiveCount: 5 because stock accuracy is critical.
+  InventoryUpdateQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-inventory-update-${Environment}"
+      VisibilityTimeout: 90   # stock update + DB transaction can take up to 30s
+      MessageRetentionPeriod: 345600
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt InventoryUpdateDLQ.Arn
+        maxReceiveCount: 5
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: InventoryStockDecrement
+
+  # ═══════════════════════════════════════════════════════════
+  # QUEUE POLICIES
+  # Allow SNS (Module 13) to deliver messages to these queues.
+  # ═══════════════════════════════════════════════════════════
+
+  OrderEventQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref OrderEventQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowAccountAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action:
+              - sqs:SendMessage
+              - sqs:ReceiveMessage
+              - sqs:DeleteMessage
+              - sqs:GetQueueAttributes
+            Resource: !GetAtt OrderEventQueue.Arn
+          - Sid: AllowSNSDelivery
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt OrderEventQueue.Arn
+
+  NotificationQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref NotificationQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowAccountAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action:
+              - sqs:SendMessage
+              - sqs:ReceiveMessage
+              - sqs:DeleteMessage
+              - sqs:GetQueueAttributes
+            Resource: !GetAtt NotificationQueue.Arn
+          - Sid: AllowSNSDelivery
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt NotificationQueue.Arn
+
+Outputs:
+  NotificationQueueUrl:
+    Description: URL of the notification queue (Spring Boot publishes here)
+    Value: !Ref NotificationQueue
+    Export:
+      Name: !Sub "${ProjectName}-notification-queue-url"
+
+  NotificationQueueArn:
+    Description: ARN of the notification queue (used by Lambda trigger)
+    Value: !GetAtt NotificationQueue.Arn
+    Export:
+      Name: !Sub "${ProjectName}-notification-queue-arn"
+
+  PaymentQueueUrl:
+    Description: URL of the FIFO payment queue
+    Value: !Ref PaymentQueue
+    Export:
+      Name: !Sub "${ProjectName}-payment-queue-url"
+
+  PaymentQueueArn:
+    Description: ARN of the payment FIFO queue
+    Value: !GetAtt PaymentQueue.Arn
+    Export:
+      Name: !Sub "${ProjectName}-payment-queue-arn"
+
+  OrderEventQueueUrl:
+    Description: URL of the order events queue
+    Value: !Ref OrderEventQueue
+    Export:
+      Name: !Sub "${ProjectName}-order-event-queue-url"
+
+  OrderEventQueueArn:
+    Description: ARN of the order events queue
+    Value: !GetAtt OrderEventQueue.Arn
+    Export:
+      Name: !Sub "${ProjectName}-order-event-queue-arn"
+
+  NotificationDLQUrl:
+    Description: URL of the notification DLQ (monitor this for failures)
+    Value: !Ref NotificationDLQ
+    Export:
+      Name: !Sub "${ProjectName}-notification-dlq-url"
+
+  InventoryUpdateQueueUrl:
+    Description: URL of the inventory update queue
+    Value: !Ref InventoryUpdateQueue
+    Export:
+      Name: !Sub "${ProjectName}-inventory-queue-url"
+
+  InventoryUpdateQueueArn:
+    Description: ARN of the inventory update queue
+    Value: !GetAtt InventoryUpdateQueue.Arn
+    Export:
+      Name: !Sub "${ProjectName}-inventory-queue-arn"
+
+  InventoryUpdateDLQUrl:
+    Description: URL of the inventory DLQ (monitor for failed stock updates)
+    Value: !Ref InventoryUpdateDLQ
+    Export:
+      Name: !Sub "${ProjectName}-inventory-dlq-url"

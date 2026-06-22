@@ -1,0 +1,166 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ShopFlow DynamoDB — Module 15: NoSQL Tables
+  Creates DynamoDB tables for JWT session store and order idempotency.
+  DynamoDB is serverless — no cluster to manage, scales automatically.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: shopflow
+
+  Environment:
+    Type: String
+    Default: dev
+
+# ─────────────────────────────────────────────────────────────
+# CONCEPT: Amazon DynamoDB
+#
+# DynamoDB is a fully managed NoSQL key-value / document database.
+# No servers, no clusters, no capacity planning — you define tables
+# and DynamoDB handles everything else.
+#
+# KEY CONCEPTS:
+#
+#  1. TABLE DESIGN (Primary Key):
+#     Every item in DynamoDB is identified by a primary key.
+#     - Simple key: just a Partition Key (PK). Items identified by PK alone.
+#     - Composite key: Partition Key (PK) + Sort Key (SK).
+#       Multiple items can share a PK, differentiated by SK.
+#       Enables "single table design" — store different entity types in one table.
+#
+#  2. CAPACITY MODES:
+#     - On-Demand: pay per request. No provisioning. Good for variable/dev load.
+#       Cost: $1.25 per million writes, $0.25 per million reads.
+#     - Provisioned: specify read/write capacity units (RCU/WCU) per second.
+#       Good for predictable load. Auto-scaling can adjust provisioned capacity.
+#     ShopVerse uses On-Demand for dev (zero cost at low traffic).
+#
+#  3. TTL (Time To Live):
+#     DynamoDB can automatically delete items when a timestamp attribute
+#     expires. Configured per-table by naming the timestamp attribute.
+#     Used for: session expiry, idempotency key expiry.
+#     Cost: free. Deletion happens within 48 hours of expiry (not instant).
+#
+#  4. GLOBAL SECONDARY INDEX (GSI):
+#     An additional index on a non-primary-key attribute.
+#     Enables querying by any attribute efficiently.
+#     Example: query all sessions for a userId (not the session token).
+#
+#  5. DynamoDB vs Redis (for sessions):
+#     - Redis (ElastiCache): in-memory, very fast, complex if Redis fails.
+#     - DynamoDB: disk-backed, slightly slower, serverless, never loses data.
+#     ShopVerse currently uses Redis for JWT sessions. DynamoDB here is
+#     for the idempotency service and as an alternative/backup session store.
+# ─────────────────────────────────────────────────────────────
+
+Resources:
+
+  # ── Session Table ─────────────────────────────────────────────────────────────
+  # Stores user JWT sessions. Alternative/complement to Redis session store.
+  # Single table design: partition key = token hash (unique per session).
+  #
+  # Item schema:
+  # {
+  #   "tokenHash": "sha256(jwt-token)",   ← PK
+  #   "userId": "uuid",
+  #   "email": "user@example.com",
+  #   "expiresAt": 1734567890,            ← Unix timestamp (TTL attribute)
+  #   "createdAt": "2024-01-01T00:00:00Z"
+  # }
+  UserSessionTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${ProjectName}-sessions-${Environment}"
+      BillingMode: PAY_PER_REQUEST   # On-demand — no capacity planning
+      # TTL: DynamoDB auto-deletes items when expiresAt timestamp passes.
+      # This replaces the manual eviction needed with Redis.
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+      # Primary key: tokenHash (unique per JWT token)
+      AttributeDefinitions:
+        - AttributeName: tokenHash
+          AttributeType: S   # S = String
+        - AttributeName: userId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tokenHash
+          KeyType: HASH   # Partition key
+      # GSI: query all sessions for a user (e.g., "logout from all devices")
+      GlobalSecondaryIndexes:
+        - IndexName: userId-index
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      # Encryption at rest (free, managed by AWS)
+      SSESpecification:
+        SSEEnabled: true
+      # Point-in-time recovery: restore table to any point in last 35 days.
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false  # Disable for dev (enable in production)
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: JWTSessionStore
+
+  # ── Idempotency Table ─────────────────────────────────────────────────────────
+  # Prevents duplicate order processing.
+  # IdempotencyService.java stores request IDs here; if a duplicate
+  # request arrives within the TTL window, it returns the cached response
+  # instead of processing again.
+  #
+  # Item schema:
+  # {
+  #   "idempotencyKey": "client-generated-uuid",   ← PK
+  #   "status": "COMPLETED" | "IN_PROGRESS",
+  #   "responseBody": "{ order JSON ... }",
+  #   "expiresAt": 1734567890                       ← TTL: 24 hours after creation
+  # }
+  IdempotencyTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${ProjectName}-idempotency-${Environment}"
+      BillingMode: PAY_PER_REQUEST
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+      AttributeDefinitions:
+        - AttributeName: idempotencyKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: idempotencyKey
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: IdempotencyKeys
+
+Outputs:
+  SessionTableName:
+    Description: DynamoDB session table name
+    Value: !Ref UserSessionTable
+    Export:
+      Name: !Sub "${ProjectName}-dynamodb-sessions-table"
+
+  IdempotencyTableName:
+    Description: DynamoDB idempotency table name
+    Value: !Ref IdempotencyTable
+    Export:
+      Name: !Sub "${ProjectName}-dynamodb-idempotency-table"
+
+  SessionTableArn:
+    Description: DynamoDB session table ARN
+    Value: !GetAtt UserSessionTable.Arn
+    Export:
+      Name: !Sub "${ProjectName}-dynamodb-sessions-arn"

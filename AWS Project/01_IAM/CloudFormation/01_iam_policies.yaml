@@ -1,0 +1,340 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ShopFlow IAM - Step 1: Custom Policies
+  Creates all custom IAM policies for the ShopFlow team.
+  Deploy this FIRST before groups, users, or roles.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: shopflow
+    Description: Project name used as prefix for all resources
+
+  PrimaryRegion:
+    Type: String
+    Default: ap-south-1
+    Description: Primary AWS region for ShopFlow (Mumbai)
+
+Resources:
+
+  # ── POLICY 1: DevOps — Full Access ─────────────────────────────────────────
+  DevOpsPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${ProjectName}-devops-policy"
+      Description: "Full DB access in all environments. Enforces encryption on production."
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+
+          - Sid: AllowFullDatabaseAccess
+            Effect: Allow
+            Action:
+              - rds:*
+              - dynamodb:*
+              - elasticache:*
+            Resource: "*"
+
+          - Sid: EnforceEncryptionOnProductionRDS
+            Effect: Deny
+            Action: rds:CreateDBInstance
+            Resource: "*"
+            Condition:
+              StringEquals:
+                "aws:ResourceTag/Environment": "production"
+              Bool:
+                "rds:StorageEncrypted": "false"
+
+          - Sid: AllowBillingAccess
+            Effect: Allow
+            Action:
+              - aws-portal:ViewBilling
+              - aws-portal:ViewUsage
+              - budgets:ViewBudget
+              - budgets:ModifyBudget
+              - ce:GetCostAndUsage
+              - ce:GetCostForecast
+            Resource: "*"
+
+          - Sid: AllowTagging
+            Effect: Allow
+            Action:
+              - tag:GetResources
+              - tag:TagResources
+              - tag:UntagResources
+            Resource: "*"
+
+  # ── POLICY 2: Senior Developer — Dev + Staging DB Only ─────────────────────
+  SeniorDeveloperPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${ProjectName}-seniordev-policy"
+      Description: "Create DB in dev and staging only. No production access. No deletion in staging."
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+
+          - Sid: AllowDevDatabaseFullAccess
+            Effect: Allow
+            Action:
+              - rds:CreateDBInstance
+              - rds:DeleteDBInstance
+              - rds:ModifyDBInstance
+              - rds:RebootDBInstance
+              - rds:CreateDBSnapshot
+              - rds:DeleteDBSnapshot
+              - rds:DescribeDBInstances
+              - rds:DescribeDBSnapshots
+              - rds:ListTagsForResource
+              - dynamodb:CreateTable
+              - dynamodb:DeleteTable
+              - dynamodb:DescribeTable
+              - dynamodb:ListTables
+            Resource: "*"
+            Condition:
+              StringEquals:
+                "aws:ResourceTag/Environment": "development"
+
+          - Sid: AllowStagingDatabaseCreateOnly
+            Effect: Allow
+            Action:
+              - rds:CreateDBInstance
+              - rds:ModifyDBInstance
+              - rds:RebootDBInstance
+              - rds:CreateDBSnapshot
+              - rds:DescribeDBInstances
+              - rds:DescribeDBSnapshots
+              - dynamodb:CreateTable
+              - dynamodb:DescribeTable
+              - dynamodb:ListTables
+            Resource: "*"
+            Condition:
+              StringEquals:
+                "aws:ResourceTag/Environment": "staging"
+
+          - Sid: DenyAllProductionDatabaseAccess
+            Effect: Deny
+            Action:
+              - rds:CreateDBInstance
+              - rds:DeleteDBInstance
+              - rds:ModifyDBInstance
+              - dynamodb:CreateTable
+              - dynamodb:DeleteTable
+            Resource: "*"
+            Condition:
+              StringEquals:
+                "aws:ResourceTag/Environment": "production"
+
+          - Sid: DenyStagingDatabaseDelete
+            Effect: Deny
+            Action:
+              - rds:DeleteDBInstance
+              - rds:DeleteDBCluster
+              - dynamodb:DeleteTable
+            Resource: "*"
+            Condition:
+              StringEquals:
+                "aws:ResourceTag/Environment": "staging"
+
+  # ── POLICY 3: Developer — Dev Environment Only ─────────────────────────────
+  DeveloperPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${ProjectName}-developer-policy"
+      Description: "Create DB in development only. No deletions anywhere. No staging or production access."
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+
+          - Sid: AllowDevDatabaseCreate
+            Effect: Allow
+            Action:
+              - rds:CreateDBInstance
+              - rds:ModifyDBInstance
+              - rds:RebootDBInstance
+              - rds:CreateDBSnapshot
+              - rds:DescribeDBInstances
+              - rds:DescribeDBSnapshots
+              - dynamodb:CreateTable
+              - dynamodb:DescribeTable
+              - dynamodb:ListTables
+              - dynamodb:PutItem
+              - dynamodb:GetItem
+              - dynamodb:UpdateItem
+              - dynamodb:Query
+              - dynamodb:Scan
+            Resource: "*"
+            Condition:
+              StringEquals:
+                "aws:ResourceTag/Environment": "development"
+
+          - Sid: DenyAllDatabaseDelete
+            Effect: Deny
+            Action:
+              - rds:DeleteDBInstance
+              - rds:DeleteDBCluster
+              - rds:DeleteDBSnapshot
+              - dynamodb:DeleteTable
+            Resource: "*"
+
+          - Sid: DenyStagingAndProductionAccess
+            Effect: Deny
+            Action:
+              - rds:CreateDBInstance
+              - rds:ModifyDBInstance
+              - dynamodb:CreateTable
+            Resource: "*"
+            Condition:
+              StringEqualsIfExists:
+                "aws:ResourceTag/Environment":
+                  - staging
+                  - production
+
+  # ── POLICY 4: Read Only ────────────────────────────────────────────────────
+  ReadOnlyPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${ProjectName}-readonly-policy"
+      Description: "View all services. Read logs and metrics. No create, modify, or delete."
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+
+          - Sid: AllowReadOnlyAccess
+            Effect: Allow
+            Action:
+              - rds:Describe*
+              - rds:List*
+              - dynamodb:Describe*
+              - dynamodb:List*
+              - dynamodb:GetItem
+              - dynamodb:Query
+              - dynamodb:Scan
+              - ec2:Describe*
+              - s3:GetObject
+              - s3:ListBucket
+              - s3:ListAllMyBuckets
+              - cloudwatch:GetMetricData
+              - cloudwatch:GetMetricStatistics
+              - cloudwatch:ListMetrics
+              - cloudwatch:DescribeAlarms
+              - logs:GetLogEvents
+              - logs:DescribeLogGroups
+              - logs:DescribeLogStreams
+              - logs:FilterLogEvents
+              - ecs:Describe*
+              - ecs:List*
+              - lambda:GetFunction
+              - lambda:ListFunctions
+            Resource: "*"
+
+          - Sid: DenyAllWriteOperations
+            Effect: Deny
+            Action:
+              - rds:Create*
+              - rds:Delete*
+              - rds:Modify*
+              - dynamodb:Create*
+              - dynamodb:Delete*
+              - dynamodb:PutItem
+              - ec2:Run*
+              - ec2:Start*
+              - ec2:Stop*
+              - ec2:Terminate*
+              - s3:PutObject
+              - s3:DeleteObject
+              - iam:Create*
+              - iam:Delete*
+            Resource: "*"
+
+  # ── POLICY 5: CI/CD Pipeline ───────────────────────────────────────────────
+  CICDPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${ProjectName}-cicd-policy"
+      Description: "Used by CI/CD pipeline roles. Deploy to ECS, push to ECR, read S3 artifacts."
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+
+          - Sid: AllowECSDeployment
+            Effect: Allow
+            Action:
+              - ecs:UpdateService
+              - ecs:DescribeServices
+              - ecs:DescribeTaskDefinition
+              - ecs:RegisterTaskDefinition
+              - ecs:ListTasks
+              - ecs:DescribeTasks
+            Resource: "*"
+
+          - Sid: AllowECRPushPull
+            Effect: Allow
+            Action:
+              - ecr:GetAuthorizationToken
+              - ecr:BatchCheckLayerAvailability
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:PutImage
+              - ecr:InitiateLayerUpload
+              - ecr:UploadLayerPart
+              - ecr:CompleteLayerUpload
+            Resource: "*"
+
+          - Sid: AllowS3ArtifactAccess
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:ListBucket
+            Resource:
+              - !Sub "arn:aws:s3:::${ProjectName}-cicd-artifacts"
+              - !Sub "arn:aws:s3:::${ProjectName}-cicd-artifacts/*"
+
+          - Sid: AllowCloudWatchLogs
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: "*"
+
+          - Sid: AllowSSMParameterRead
+            Effect: Allow
+            Action:
+              - ssm:GetParameter
+              - ssm:GetParameters
+              - ssm:GetParametersByPath
+            Resource: !Sub "arn:aws:ssm:${PrimaryRegion}:*:parameter/${ProjectName}/*"
+
+Outputs:
+
+  DevOpsPolicyArn:
+    Description: ARN of the DevOps custom policy
+    Value: !Ref DevOpsPolicy
+    Export:
+      Name: !Sub "${ProjectName}-devops-policy-arn"
+
+  SeniorDeveloperPolicyArn:
+    Description: ARN of the Senior Developer custom policy
+    Value: !Ref SeniorDeveloperPolicy
+    Export:
+      Name: !Sub "${ProjectName}-seniordev-policy-arn"
+
+  DeveloperPolicyArn:
+    Description: ARN of the Developer custom policy
+    Value: !Ref DeveloperPolicy
+    Export:
+      Name: !Sub "${ProjectName}-developer-policy-arn"
+
+  ReadOnlyPolicyArn:
+    Description: ARN of the Read Only custom policy
+    Value: !Ref ReadOnlyPolicy
+    Export:
+      Name: !Sub "${ProjectName}-readonly-policy-arn"
+
+  CICDPolicyArn:
+    Description: ARN of the CI/CD custom policy
+    Value: !Ref CICDPolicy
+    Export:
+      Name: !Sub "${ProjectName}-cicd-policy-arn"

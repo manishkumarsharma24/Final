@@ -1,0 +1,395 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ShopFlow IAM - Step 3: Service Roles
+  Creates all IAM roles for AWS services (EC2, Lambda, ECS, RDS, CI/CD).
+  These roles are assumed by AWS services - NOT by humans.
+  Deploy AFTER 01_iam_policies.yaml
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: shopflow
+    Description: Project name used as prefix for all resources
+
+  PrimaryRegion:
+    Type: String
+    Default: ap-south-1
+    Description: Primary AWS region for ShopFlow (Mumbai)
+
+Resources:
+
+  # ── ROLE 1: EC2 Role ───────────────────────────────────────────────────────
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-ec2-role"
+      Description: "Assumed by EC2 instances. Read S3, write CloudWatch logs, read Secrets Manager."
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+      Policies:
+        - PolicyName: EC2S3ReadPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: AllowS3Read
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${ProjectName}-*"
+                  - !Sub "arn:aws:s3:::${ProjectName}-*/*"
+              - Sid: AllowSecretsManagerRead
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: !Sub "arn:aws:secretsmanager:${PrimaryRegion}:*:secret:${ProjectName}/*"
+              - Sid: AllowCloudWatchLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource: "*"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: cloudformation
+
+  # EC2 Instance Profile (required to attach role to EC2)
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub "${ProjectName}-ec2-instance-profile"
+      Roles:
+        - !Ref EC2Role
+
+  # ── ROLE 2: Lambda Role ────────────────────────────────────────────────────
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-lambda-role"
+      Description: "Assumed by Lambda functions. Read/write DynamoDB, send SQS, write CloudWatch logs."
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: LambdaAppPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: AllowDynamoDBReadWrite
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:BatchGetItem
+                  - dynamodb:BatchWriteItem
+                Resource:
+                  - !Sub "arn:aws:dynamodb:${PrimaryRegion}:*:table/${ProjectName}-*"
+              - Sid: AllowSQSSend
+                Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:GetQueueUrl
+                  - sqs:GetQueueAttributes
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                Resource: !Sub "arn:aws:sqs:${PrimaryRegion}:*:${ProjectName}-*"
+              - Sid: AllowS3Read
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${ProjectName}-*"
+                  - !Sub "arn:aws:s3:::${ProjectName}-*/*"
+              - Sid: AllowSecretsManagerRead
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Sub "arn:aws:secretsmanager:${PrimaryRegion}:*:secret:${ProjectName}/*"
+              - Sid: AllowKinesisWrite
+                Effect: Allow
+                Action:
+                  - kinesis:PutRecord
+                  - kinesis:PutRecords
+                  - kinesis:GetShardIterator
+                  - kinesis:GetRecords
+                  - kinesis:DescribeStream
+                Resource: !Sub "arn:aws:kinesis:${PrimaryRegion}:*:stream/${ProjectName}-*"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: cloudformation
+
+  # ── ROLE 3: ECS Task Role ──────────────────────────────────────────────────
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-ecs-task-role"
+      Description: "Assumed by ECS containers (task role). Read S3, read/write DynamoDB, read Secrets Manager."
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ECSTaskAppPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: AllowS3ReadWrite
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${ProjectName}-*"
+                  - !Sub "arn:aws:s3:::${ProjectName}-*/*"
+              - Sid: AllowDynamoDBReadWrite
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:BatchGetItem
+                  - dynamodb:BatchWriteItem
+                Resource: !Sub "arn:aws:dynamodb:${PrimaryRegion}:*:table/${ProjectName}-*"
+              - Sid: AllowSecretsManagerRead
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: !Sub "arn:aws:secretsmanager:${PrimaryRegion}:*:secret:${ProjectName}/*"
+              - Sid: AllowCloudWatchLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Sid: AllowSQSSend
+                Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:GetQueueUrl
+                  - sqs:GetQueueAttributes
+                Resource: !Sub "arn:aws:sqs:${PrimaryRegion}:*:${ProjectName}-*"
+              - Sid: AllowKinesisWrite
+                Effect: Allow
+                Action:
+                  - kinesis:PutRecord
+                  - kinesis:PutRecords
+                  - kinesis:DescribeStream
+                Resource: !Sub "arn:aws:kinesis:${PrimaryRegion}:*:stream/${ProjectName}-*"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: cloudformation
+
+  # ECS Task Execution Role (for pulling images and writing logs - separate from task role)
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-ecs-execution-role"
+      Description: "ECS task execution role. Pulls ECR images, writes CloudWatch logs. Used by ECS agent."
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: ECSSecretsAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: AllowSecretsForECS
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - ssm:GetParameters
+                  - ssm:GetParameter
+                Resource:
+                  - !Sub "arn:aws:secretsmanager:${PrimaryRegion}:*:secret:${ProjectName}/*"
+                  - !Sub "arn:aws:ssm:${PrimaryRegion}:*:parameter/${ProjectName}/*"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: cloudformation
+
+  # ── ROLE 4: RDS / Aurora Role ──────────────────────────────────────────────
+  RDSRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-rds-role"
+      Description: "Assumed by RDS/Aurora. Read Secrets Manager, write CloudWatch logs, KMS encrypt/decrypt."
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: rds.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: RDSAppPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: AllowCloudWatchLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${PrimaryRegion}:*:log-group:/aws/rds/*"
+              - Sid: AllowKMSEncryptDecrypt
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                  - kms:DescribeKey
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    "kms:ViaService": !Sub "rds.${PrimaryRegion}.amazonaws.com"
+              - Sid: AllowS3Export
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${ProjectName}-rds-exports"
+                  - !Sub "arn:aws:s3:::${ProjectName}-rds-exports/*"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: cloudformation
+
+  # ── ROLE 5: CI/CD Pipeline Role ───────────────────────────────────────────
+  CICDRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-cicd-role"
+      Description: "Assumed by CodePipeline, CodeBuild, CodeDeploy. Deploy to ECS, push to ECR."
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+                - codebuild.amazonaws.com
+                - codedeploy.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !ImportValue
+          Fn::Sub: "${ProjectName}-cicd-policy-arn"
+      Policies:
+        - PolicyName: CICDAdditionalPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: AllowPassRoleToECS
+                Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - !GetAtt ECSTaskRole.Arn
+                  - !GetAtt ECSTaskExecutionRole.Arn
+                Condition:
+                  StringEquals:
+                    "iam:PassedToService": ecs-tasks.amazonaws.com
+              - Sid: AllowCodeDeployECS
+                Effect: Allow
+                Action:
+                  - codedeploy:CreateDeployment
+                  - codedeploy:GetDeployment
+                  - codedeploy:GetDeploymentConfig
+                  - codedeploy:GetApplicationRevision
+                  - codedeploy:RegisterApplicationRevision
+                Resource: "*"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: cloudformation
+
+Outputs:
+
+  EC2RoleArn:
+    Description: ARN of EC2 role
+    Value: !GetAtt EC2Role.Arn
+    Export:
+      Name: !Sub "${ProjectName}-ec2-role-arn"
+
+  EC2InstanceProfileArn:
+    Description: ARN of EC2 instance profile
+    Value: !GetAtt EC2InstanceProfile.Arn
+    Export:
+      Name: !Sub "${ProjectName}-ec2-instance-profile-arn"
+
+  LambdaRoleArn:
+    Description: ARN of Lambda role
+    Value: !GetAtt LambdaRole.Arn
+    Export:
+      Name: !Sub "${ProjectName}-lambda-role-arn"
+
+  ECSTaskRoleArn:
+    Description: ARN of ECS task role
+    Value: !GetAtt ECSTaskRole.Arn
+    Export:
+      Name: !Sub "${ProjectName}-ecs-task-role-arn"
+
+  ECSTaskExecutionRoleArn:
+    Description: ARN of ECS task execution role
+    Value: !GetAtt ECSTaskExecutionRole.Arn
+    Export:
+      Name: !Sub "${ProjectName}-ecs-execution-role-arn"
+
+  RDSRoleArn:
+    Description: ARN of RDS role
+    Value: !GetAtt RDSRole.Arn
+    Export:
+      Name: !Sub "${ProjectName}-rds-role-arn"
+
+  CICDRoleArn:
+    Description: ARN of CI/CD role
+    Value: !GetAtt CICDRole.Arn
+    Export:
+      Name: !Sub "${ProjectName}-cicd-role-arn"

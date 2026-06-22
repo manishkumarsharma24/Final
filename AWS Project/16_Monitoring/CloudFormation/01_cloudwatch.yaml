@@ -1,0 +1,384 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ShopFlow CloudWatch — Module 16: Monitoring, Alarms, and Dashboard
+  Covers deployed stacks: SQS, Lambda, DynamoDB, SNS.
+  Alarms publish to the SNS ops alert topic (shopflow-sns stack).
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: shopflow
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, production]
+
+  OpsAlertTopicArn:
+    Type: String
+    Description: >
+      ARN of the SNS ops alert topic (shopflow-ops-alerts-dev).
+      Find it in SNS Console → Topics → shopflow-ops-alerts-dev → copy ARN.
+      Format: arn:aws:sns:ap-south-1:<account>:shopflow-ops-alerts-dev
+
+# ─────────────────────────────────────────────────────────────
+# CONCEPT: Amazon CloudWatch
+#
+# CloudWatch is AWS's built-in monitoring service. It has four parts:
+#
+#  1. LOGS: collect log output from Lambda, SQS, DynamoDB, etc.
+#     Log data is organized into Log Groups (one per service)
+#     and Log Streams (one per instance/invocation).
+#     Search logs with CloudWatch Logs Insights (SQL-like queries).
+#
+#  2. METRICS: numerical measurements over time.
+#     AWS services emit metrics automatically (invocation count,
+#     error rate, queue depth, throttles, etc.).
+#
+#  3. ALARMS: trigger when a metric crosses a threshold.
+#     Alarm actions: notify SNS topic → email to ops team.
+#
+#  4. DASHBOARDS: charts combining multiple metrics in one view.
+#
+# SERVICES MONITORED IN THIS TEMPLATE (matching deployed stacks):
+#   - SQS  (shopflow-sqs):      DLQ depths for all 4 queues
+#   - Lambda (shopflow-lambda): errors and duration for both functions
+#   - DynamoDB (shopflow-dynamodb): throttled reads/writes
+#   - SNS (shopflow-sns):       failed deliveries to SQS
+# ─────────────────────────────────────────────────────────────
+
+Resources:
+
+  # ═══════════════════════════════════════════════════════════
+  # NOTE: Lambda log groups are already created by the shopflow-lambda stack.
+  # They are managed there with 30-day retention.
+  # ═══════════════════════════════════════════════════════════
+  # SQS ALARMS — shopflow-sqs stack
+  # Any message in a DLQ = a processing failure. Alert immediately.
+  # ═══════════════════════════════════════════════════════════
+
+  NotificationDLQAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-notification-dlq-not-empty-${Environment}"
+      AlarmDescription: "Messages in notification DLQ. Email Lambda is failing — check Lambda logs."
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !Sub "${ProjectName}-notification-dlq-${Environment}"
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsAlertTopicArn
+
+  PaymentDLQAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-payment-dlq-not-empty-${Environment}"
+      AlarmDescription: "Messages in payment DLQ. Payment processing is failing — investigate immediately."
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !Sub "${ProjectName}-payment-dlq-${Environment}.fifo"
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsAlertTopicArn
+
+  OrderEventsDLQAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-order-events-dlq-not-empty-${Environment}"
+      AlarmDescription: "Messages in order events DLQ. Order processing is failing."
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !Sub "${ProjectName}-order-events-dlq-${Environment}"
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsAlertTopicArn
+
+  InventoryDLQAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-inventory-dlq-not-empty-${Environment}"
+      AlarmDescription: "Messages in inventory DLQ. Stock decrement is failing — overselling risk."
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !Sub "${ProjectName}-inventory-update-dlq-${Environment}"
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsAlertTopicArn
+
+  # ═══════════════════════════════════════════════════════════
+  # LAMBDA ALARMS — shopflow-lambda stack
+  # ═══════════════════════════════════════════════════════════
+
+  # Email notifier errors — any error = an email was not sent
+  EmailNotifierErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-email-notifier-errors-${Environment}"
+      AlarmDescription: "Email notifier Lambda errors > 0. Order confirmation emails may not be sending."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${ProjectName}-email-notifier-${Environment}"
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsAlertTopicArn
+
+  # Order processor errors — any error = an inventory update was missed
+  OrderProcessorErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-order-processor-errors-${Environment}"
+      AlarmDescription: "Order processor Lambda errors > 0. Inventory updates may be failing."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${ProjectName}-order-processor-${Environment}"
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsAlertTopicArn
+
+  # Email notifier duration — if it's taking > 30s, SendGrid may be slow or timing out
+  EmailNotifierDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-email-notifier-slow-${Environment}"
+      AlarmDescription: "Email notifier avg duration > 30 seconds. Email API may be slow."
+      Namespace: AWS/Lambda
+      MetricName: Duration
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${ProjectName}-email-notifier-${Environment}"
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 30000   # 30 seconds in milliseconds
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsAlertTopicArn
+
+  # ═══════════════════════════════════════════════════════════
+  # DYNAMODB ALARMS — shopflow-dynamodb stack
+  # Throttling = DynamoDB rejecting requests because of capacity limits.
+  # On-demand mode rarely throttles, but worth alerting on.
+  # ═══════════════════════════════════════════════════════════
+
+  SessionTableThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-sessions-table-throttled-${Environment}"
+      AlarmDescription: "DynamoDB sessions table throttled requests > 5. JWT validation may be failing."
+      Namespace: AWS/DynamoDB
+      MetricName: ThrottledRequests
+      Dimensions:
+        - Name: TableName
+          Value: !Sub "${ProjectName}-sessions-${Environment}"
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsAlertTopicArn
+
+  IdempotencyTableThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-idempotency-table-throttled-${Environment}"
+      AlarmDescription: "DynamoDB idempotency table throttled. Duplicate order prevention may be failing."
+      Namespace: AWS/DynamoDB
+      MetricName: ThrottledRequests
+      Dimensions:
+        - Name: TableName
+          Value: !Sub "${ProjectName}-idempotency-${Environment}"
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsAlertTopicArn
+
+  # ═══════════════════════════════════════════════════════════
+  # SNS ALARM — shopflow-sns stack
+  # Failed deliveries = messages published to SNS but not delivered to SQS.
+  # ═══════════════════════════════════════════════════════════
+
+  OrderFanoutFailedDeliveryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-order-fanout-failed-delivery-${Environment}"
+      AlarmDescription: "SNS order fan-out failed to deliver to one or more SQS queues."
+      Namespace: AWS/SNS
+      MetricName: NumberOfNotificationsFailed
+      Dimensions:
+        - Name: TopicName
+          Value: !Sub "${ProjectName}-order-fanout-${Environment}"
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsAlertTopicArn
+
+  # ═══════════════════════════════════════════════════════════
+  # DASHBOARD
+  # ═══════════════════════════════════════════════════════════
+  ShopVerseDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "${ProjectName}-overview-${Environment}"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "properties": {
+                "title": "SQS: Queue Depths",
+                "region": "${AWS::Region}",
+                "metrics": [
+                  ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "${ProjectName}-notifications-${Environment}", {"label": "Notifications"}],
+                  ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "${ProjectName}-order-events-${Environment}", {"label": "Order Events"}],
+                  ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "${ProjectName}-inventory-update-${Environment}", {"label": "Inventory"}]
+                ],
+                "period": 60,
+                "stat": "Maximum",
+                "view": "timeSeries",
+                "width": 12,
+                "height": 6
+              }
+            },
+            {
+              "type": "metric",
+              "properties": {
+                "title": "SQS: DLQ Depths (non-zero = failure)",
+                "region": "${AWS::Region}",
+                "metrics": [
+                  ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "${ProjectName}-notification-dlq-${Environment}", {"label": "Notification DLQ", "color": "#F44336"}],
+                  ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "${ProjectName}-order-events-dlq-${Environment}", {"label": "Order Events DLQ", "color": "#FF9800"}],
+                  ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "${ProjectName}-inventory-update-dlq-${Environment}", {"label": "Inventory DLQ", "color": "#9C27B0"}]
+                ],
+                "period": 60,
+                "stat": "Maximum",
+                "view": "timeSeries",
+                "width": 12,
+                "height": 6
+              }
+            },
+            {
+              "type": "metric",
+              "properties": {
+                "title": "Lambda: Invocations and Errors",
+                "region": "${AWS::Region}",
+                "metrics": [
+                  ["AWS/Lambda", "Invocations", "FunctionName", "${ProjectName}-email-notifier-${Environment}", {"label": "Email Notifier: Invocations", "color": "#2196F3"}],
+                  ["AWS/Lambda", "Errors", "FunctionName", "${ProjectName}-email-notifier-${Environment}", {"label": "Email Notifier: Errors", "color": "#F44336"}],
+                  ["AWS/Lambda", "Invocations", "FunctionName", "${ProjectName}-order-processor-${Environment}", {"label": "Order Processor: Invocations", "color": "#4CAF50"}],
+                  ["AWS/Lambda", "Errors", "FunctionName", "${ProjectName}-order-processor-${Environment}", {"label": "Order Processor: Errors", "color": "#FF9800"}]
+                ],
+                "period": 300,
+                "stat": "Sum",
+                "view": "timeSeries",
+                "width": 12,
+                "height": 6
+              }
+            },
+            {
+              "type": "metric",
+              "properties": {
+                "title": "Lambda: Duration (ms)",
+                "region": "${AWS::Region}",
+                "metrics": [
+                  ["AWS/Lambda", "Duration", "FunctionName", "${ProjectName}-email-notifier-${Environment}", {"label": "Email Notifier", "stat": "Average"}],
+                  ["AWS/Lambda", "Duration", "FunctionName", "${ProjectName}-order-processor-${Environment}", {"label": "Order Processor", "stat": "Average"}]
+                ],
+                "period": 300,
+                "stat": "Average",
+                "view": "timeSeries",
+                "width": 12,
+                "height": 6
+              }
+            },
+            {
+              "type": "metric",
+              "properties": {
+                "title": "DynamoDB: Throttled Requests",
+                "region": "${AWS::Region}",
+                "metrics": [
+                  ["AWS/DynamoDB", "ThrottledRequests", "TableName", "${ProjectName}-sessions-${Environment}", {"label": "Sessions Table", "color": "#F44336"}],
+                  ["AWS/DynamoDB", "ThrottledRequests", "TableName", "${ProjectName}-idempotency-${Environment}", {"label": "Idempotency Table", "color": "#FF9800"}]
+                ],
+                "period": 300,
+                "stat": "Sum",
+                "view": "timeSeries",
+                "width": 12,
+                "height": 6
+              }
+            },
+            {
+              "type": "metric",
+              "properties": {
+                "title": "SNS: Order Fan-out Delivery Failures",
+                "region": "${AWS::Region}",
+                "metrics": [
+                  ["AWS/SNS", "NumberOfNotificationsFailed", "TopicName", "${ProjectName}-order-fanout-${Environment}", {"label": "Failed Deliveries", "color": "#F44336"}],
+                  ["AWS/SNS", "NumberOfNotificationsDelivered", "TopicName", "${ProjectName}-order-fanout-${Environment}", {"label": "Delivered", "color": "#4CAF50"}]
+                ],
+                "period": 300,
+                "stat": "Sum",
+                "view": "timeSeries",
+                "width": 12,
+                "height": 6
+              }
+            }
+          ]
+        }
+
+Outputs:
+  DashboardUrl:
+    Description: CloudWatch Dashboard URL
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${ProjectName}-overview-${Environment}"

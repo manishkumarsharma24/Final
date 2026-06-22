@@ -1,0 +1,270 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ShopFlow VPC Stack — Creates VPC, Public and Private Subnets,
+  Internet Gateway, and Route Tables across 2 Availability Zones.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: shopflow
+    Description: Project name used as prefix for all resource names
+
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: CIDR block for the VPC (65,536 addresses)
+
+  PublicSubnet1Cidr:
+    Type: String
+    Default: 10.0.1.0/24
+    Description: CIDR for public subnet in AZ-a (256 addresses)
+
+  PublicSubnet2Cidr:
+    Type: String
+    Default: 10.0.2.0/24
+    Description: CIDR for public subnet in AZ-b (256 addresses)
+
+  PrivateSubnet1Cidr:
+    Type: String
+    Default: 10.0.3.0/24
+    Description: CIDR for private subnet in AZ-a (256 addresses)
+
+  PrivateSubnet2Cidr:
+    Type: String
+    Default: 10.0.4.0/24
+    Description: CIDR for private subnet in AZ-b (256 addresses)
+
+Resources:
+
+  # ─────────────────────────────────────────────────────────────
+  # VPC
+  # The main private network for ShopFlow.
+  # All resources live inside this boundary.
+  # ─────────────────────────────────────────────────────────────
+  ShopFlowVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true        # Allows AWS DNS to resolve names inside VPC
+      EnableDnsHostnames: true      # Assigns DNS hostnames to EC2 instances
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-vpc"
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ─────────────────────────────────────────────────────────────
+  # INTERNET GATEWAY
+  # Entry and exit point for internet traffic.
+  # Must be attached to the VPC and referenced in the public route table.
+  # ─────────────────────────────────────────────────────────────
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-igw"
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # Attach IGW to VPC — required before routing can use it
+  IGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref ShopFlowVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # ─────────────────────────────────────────────────────────────
+  # PUBLIC SUBNETS
+  # These subnets have a route to the Internet Gateway.
+  # Only the Application Load Balancer should live here.
+  # ─────────────────────────────────────────────────────────────
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ShopFlowVPC
+      CidrBlock: !Ref PublicSubnet1Cidr
+      AvailabilityZone: !Select [0, !GetAZs '']  # First AZ in region (ap-south-1a)
+      MapPublicIpOnLaunch: true                   # Resources get a public IP automatically
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-pub-1a"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Type
+          Value: Public
+        - Key: AZ
+          Value: AZ-a
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ShopFlowVPC
+      CidrBlock: !Ref PublicSubnet2Cidr
+      AvailabilityZone: !Select [1, !GetAZs '']  # Second AZ in region (ap-south-1b)
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-pub-1b"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Type
+          Value: Public
+        - Key: AZ
+          Value: AZ-b
+
+  # ─────────────────────────────────────────────────────────────
+  # PRIVATE SUBNETS
+  # No route to the Internet Gateway.
+  # EC2 app servers and RDS database live here.
+  # Cannot be reached from or reach the internet.
+  # ─────────────────────────────────────────────────────────────
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ShopFlowVPC
+      CidrBlock: !Ref PrivateSubnet1Cidr
+      AvailabilityZone: !Select [0, !GetAZs '']  # First AZ (ap-south-1a)
+      MapPublicIpOnLaunch: false                  # No public IP — private resources only
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-prv-1a"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Type
+          Value: Private
+        - Key: AZ
+          Value: AZ-a
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ShopFlowVPC
+      CidrBlock: !Ref PrivateSubnet2Cidr
+      AvailabilityZone: !Select [1, !GetAZs '']  # Second AZ (ap-south-1b)
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-prv-1b"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Type
+          Value: Private
+        - Key: AZ
+          Value: AZ-b
+
+  # ─────────────────────────────────────────────────────────────
+  # PUBLIC ROUTE TABLE
+  # Sends internet-bound traffic (0.0.0.0/0) to the Internet Gateway.
+  # Associated with both public subnets.
+  # ─────────────────────────────────────────────────────────────
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ShopFlowVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-public-rt"
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # Route: all internet traffic → IGW
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IGWAttachment          # IGW must be attached before creating this route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0  # All traffic not destined for VPC
+      GatewayId: !Ref InternetGateway
+
+  # Associate public route table with PublicSubnet1
+  PublicSubnet1RouteTableAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  # Associate public route table with PublicSubnet2
+  PublicSubnet2RouteTableAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # ─────────────────────────────────────────────────────────────
+  # PRIVATE ROUTE TABLE
+  # Only has local VPC route — no internet access.
+  # Associated with both private subnets.
+  # ─────────────────────────────────────────────────────────────
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ShopFlowVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-private-rt"
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # Associate private route table with PrivateSubnet1
+  PrivateSubnet1RouteTableAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  # Associate private route table with PrivateSubnet2
+  PrivateSubnet2RouteTableAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+# ─────────────────────────────────────────────────────────────
+# OUTPUTS
+# These values are exported so Stack 2 (security groups)
+# and future stacks (EC2, RDS) can reference them by name.
+# ─────────────────────────────────────────────────────────────
+Outputs:
+
+  VpcId:
+    Description: VPC ID — used by all other stacks
+    Value: !Ref ShopFlowVPC
+    Export:
+      Name: !Sub "${ProjectName}-vpc-id"
+
+  VpcCidr:
+    Description: VPC CIDR block
+    Value: !GetAtt ShopFlowVPC.CidrBlock
+    Export:
+      Name: !Sub "${ProjectName}-vpc-cidr"
+
+  PublicSubnet1Id:
+    Description: Public Subnet AZ-a ID
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: !Sub "${ProjectName}-pub-subnet-1a"
+
+  PublicSubnet2Id:
+    Description: Public Subnet AZ-b ID
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: !Sub "${ProjectName}-pub-subnet-1b"
+
+  PrivateSubnet1Id:
+    Description: Private Subnet AZ-a ID
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: !Sub "${ProjectName}-prv-subnet-1a"
+
+  PrivateSubnet2Id:
+    Description: Private Subnet AZ-b ID
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: !Sub "${ProjectName}-prv-subnet-1b"
+
+  InternetGatewayId:
+    Description: Internet Gateway ID
+    Value: !Ref InternetGateway
+    Export:
+      Name: !Sub "${ProjectName}-igw-id"

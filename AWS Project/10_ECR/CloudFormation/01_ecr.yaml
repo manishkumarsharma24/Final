@@ -1,0 +1,110 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ShopFlow ECR — Module 10: Elastic Container Registry
+  Creates a private Docker image repository for ShopVerse.
+  ECS Fargate (Module 11) pulls images from here to run containers.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: shopflow
+
+  Environment:
+    Type: String
+    Default: dev
+
+# ─────────────────────────────────────────────────────────────
+# CONCEPT: Amazon ECR (Elastic Container Registry)
+#
+# ECR is AWS's private Docker image registry — like Docker Hub,
+# but private, encrypted, and integrated with IAM.
+#
+# WORKFLOW:
+#   1. Developer or CodeBuild runs: docker build -t shopverse .
+#   2. Tag the image: docker tag shopverse <account>.dkr.ecr.<region>.amazonaws.com/shopflow-shopverse:latest
+#   3. Authenticate: aws ecr get-login-password | docker login ...
+#   4. Push: docker push <tagged-image>
+#   5. ECS task definition references the image URI
+#   6. ECS pulls the image from ECR when launching containers
+#
+# KEY FEATURES:
+#   - Image scanning: automatically scan for known CVE vulnerabilities on push
+#   - Lifecycle policies: automatically delete old image versions (save storage)
+#   - Immutable tags: prevent overwriting an image with the same tag
+#     (e.g., can't overwrite :v1.0 — forces use of new tags for new versions)
+#   - Encryption: images encrypted at rest using KMS
+#   - Cross-account access: share images across AWS accounts via resource policies
+#
+# IMAGE URI FORMAT:
+#   <account-id>.dkr.ecr.<region>.amazonaws.com/<repo-name>:<tag>
+#   Example: 123456789.dkr.ecr.ap-south-1.amazonaws.com/shopflow-shopverse:latest
+# ─────────────────────────────────────────────────────────────
+
+Resources:
+
+  # ── ShopVerse Application Repository ────────────────────────────────────────
+  ShopVerseRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${ProjectName}-shopverse"
+      # Immutable tags: once you push tag :v1.0, you cannot overwrite it.
+      # Forces proper versioning — every deploy uses a unique tag.
+      # Disable if you use :latest tag (not recommended for production).
+      ImageTagMutability: MUTABLE   # Allow :latest tag for learning simplicity
+      # Scan on push: check for known vulnerabilities (CVEs) automatically.
+      # Results appear in the ECR console within minutes of pushing.
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      # Encryption using KMS (stronger than default AES-256)
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      # Lifecycle policy: keep only the last 10 tagged images.
+      # Prevents repository from filling up with stale images.
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep last 10 tagged releases",
+                "selection": {
+                  "tagStatus": "tagged",
+                  "tagPrefixList": ["v"],
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": {"type": "expire"}
+              },
+              {
+                "rulePriority": 2,
+                "description": "Delete untagged images older than 7 days",
+                "selection": {
+                  "tagStatus": "untagged",
+                  "countType": "sinceImagePushed",
+                  "countUnit": "days",
+                  "countNumber": 7
+                },
+                "action": {"type": "expire"}
+              }
+            ]
+          }
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  RepositoryUri:
+    Description: >
+      Full ECR repository URI. Use this in docker tag and docker push commands.
+      Format: <account>.dkr.ecr.<region>.amazonaws.com/shopflow-shopverse
+    Value: !GetAtt ShopVerseRepository.RepositoryUri
+    Export:
+      Name: !Sub "${ProjectName}-ecr-repo-uri"
+
+  RepositoryName:
+    Description: ECR repository name
+    Value: !Ref ShopVerseRepository
+    Export:
+      Name: !Sub "${ProjectName}-ecr-repo-name"

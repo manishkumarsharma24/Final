@@ -1,0 +1,61 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ShopFlow RDS — Module 6a: DB Subnet Group
+  A DB Subnet Group tells RDS which subnets it can place the DB instance in.
+  Must be created before the RDS instance itself.
+  Uses the private subnets from Module 2 (VPC).
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: shopflow
+
+  Environment:
+    Type: String
+    Default: dev
+
+# ─────────────────────────────────────────────────────────────
+# CONCEPT: DB Subnet Group
+#
+# RDS instances must be associated with a "DB Subnet Group" —
+# a named collection of subnets that RDS is allowed to use.
+#
+# Why two subnets in different AZs?
+# Even if you start with a Single-AZ RDS instance (which we do
+# for learning), the subnet group must span at least 2 AZs.
+# This is because:
+#   - AWS enforces this as a best practice constraint
+#   - If you later enable Multi-AZ, the standby replica can be
+#     placed in the second AZ's subnet immediately — no changes needed
+#
+# We use the private subnets (not public) because:
+#   - The RDS instance should NOT be directly reachable from the internet
+#   - Only EC2/ECS instances in the same VPC can connect to it
+#   - The RDS Security Group (shopflow-rds-sg) already enforces this —
+#     but the subnet also provides a second layer of network isolation
+# ─────────────────────────────────────────────────────────────
+
+Resources:
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: !Sub "${ProjectName}-db-subnet-group"
+      DBSubnetGroupDescription: "Private subnets for ShopFlow RDS MySQL in 2 AZs"
+      SubnetIds:
+        # Import the private subnet IDs from the VPC stack (Module 2)
+        - !ImportValue shopflow-prv-subnet-1a
+        - !ImportValue shopflow-prv-subnet-1b
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-db-subnet-group"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  DBSubnetGroupName:
+    Description: Name of the DB subnet group for RDS
+    Value: !Ref DBSubnetGroup
+    Export:
+      Name: !Sub "${ProjectName}-db-subnet-group"

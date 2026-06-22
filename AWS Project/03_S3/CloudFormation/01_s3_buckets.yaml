@@ -1,0 +1,324 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ShopFlow S3 — Module 3: S3 Buckets
+  Creates all S3 buckets needed by the ShopFlow project.
+  S3 is pure global infrastructure — no VPC dependency.
+  Deploy this before RDS, EC2, ECS, or CI/CD.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: shopflow
+    Description: Project name used as prefix for all bucket names
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, production]
+    Description: Deployment environment (used in bucket name to avoid global name conflicts)
+
+# ─────────────────────────────────────────────────────────────
+# CONCEPT: S3 Buckets
+#
+# S3 (Simple Storage Service) stores files called "objects"
+# inside containers called "buckets".
+#
+# Key rules:
+#  1. Bucket names are GLOBALLY unique across all AWS accounts.
+#     You cannot create a bucket named "shopflow-artifacts" if
+#     anyone else in the world already has it.
+#     Solution: append your project + environment to make it unique.
+#
+#  2. Buckets are REGIONAL — created in one region, but the name
+#     is globally reserved.
+#
+#  3. Objects inside a bucket can be private (default) or public.
+#     Best practice: keep all buckets private; serve public content
+#     through CloudFront, not direct S3 URLs.
+#
+#  4. Versioning: when enabled, S3 keeps every version of every
+#     object. Deleting an object just adds a "delete marker" — the
+#     old versions are still there. Critical for artifacts and backups.
+#
+#  5. Lifecycle rules: automatically move objects to cheaper storage
+#     classes or delete them after N days.
+# ─────────────────────────────────────────────────────────────
+
+Resources:
+
+  # ── BUCKET 1: Application Artifacts ────────────────────────────────────────
+  # Stores compiled ShopVerse JAR files and Docker-related assets.
+  # EC2 user data pulls the JAR from here on instance startup.
+  # CodeBuild pushes build outputs here during CI/CD.
+  ArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-artifacts-${Environment}"
+      # Versioning: keep every version of every JAR.
+      # If a bad deploy goes out, you can roll back to a previous JAR.
+      VersioningConfiguration:
+        Status: Enabled
+      # Encryption: all objects encrypted at rest using AES-256.
+      # This is free and there is no reason NOT to enable it.
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      # Block all public access — JARs should never be publicly readable.
+      # Even if someone uploads an object with a public ACL, this overrides it.
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      # Lifecycle rule: automatically delete old artifact versions after 30 days.
+      # Without this, every JAR version accumulates and storage costs grow.
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30   # Delete non-current versions after 30 days
+          - Id: DeleteIncompleteUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7  # Clean up failed/incomplete uploads after 7 days
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-artifacts-${Environment}"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: AppArtifacts
+
+  # ── BUCKET 2: CI/CD Pipeline Artifacts ─────────────────────────────────────
+  # Used exclusively by AWS CodePipeline as its artifact store.
+  # CodePipeline requires a dedicated S3 bucket to pass build outputs
+  # between pipeline stages (Source → Build → Deploy).
+  # Already referenced in the shopflow-cicd-policy (IAM Module).
+  CICDArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-cicd-artifacts-${Environment}"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldPipelineArtifacts
+            Status: Enabled
+            ExpirationInDays: 7    # Pipeline artifacts are only needed until the deploy completes
+          - Id: DeleteIncompleteUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-cicd-artifacts-${Environment}"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: CICDPipeline
+
+  # ── BUCKET 3: RDS Snapshot Exports ─────────────────────────────────────────
+  # Aurora/RDS can export snapshots to S3 in Parquet format for analytics.
+  # The RDS service role (shopflow-rds-role) already has permission to write here.
+  # Also used for manual SQL dumps during migrations or DR drills.
+  RDSExportsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-rds-exports-${Environment}"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ArchiveOldExports
+            Status: Enabled
+            Transitions:
+              # Move to cheaper storage after 30 days.
+              # Standard-IA costs 60% less than Standard — good for infrequent access.
+              - TransitionInDays: 30
+                StorageClass: STANDARD_IA
+              # Move to cheapest storage after 90 days.
+              # Glacier Instant Retrieval costs 68% less than Standard-IA.
+              - TransitionInDays: 90
+                StorageClass: GLACIER_IR
+            ExpirationInDays: 365  # Delete exports after 1 year
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-rds-exports-${Environment}"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: RDSExports
+
+  # ── BUCKET 4: Product Images ────────────────────────────────────────────────
+  # Stores product photos uploaded by admins via the ShopVerse admin API.
+  # IMPORTANT: This bucket is NOT public. Images are served via CloudFront CDN
+  # which has exclusive read permission via a Bucket Policy (see below).
+  # Direct S3 URLs are blocked — users must go through CloudFront.
+  ProductImagesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-product-images-${Environment}"
+      # No versioning for images — they're uploaded once, rarely change.
+      # Versioning would double storage costs for no benefit here.
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      # CORS: allows the React SPA (running in the browser) to upload images
+      # directly to S3 using pre-signed URLs — avoiding routing large files
+      # through the Spring Boot app.
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ['*']
+            AllowedMethods: [GET, PUT, POST]
+            AllowedOrigins:
+              - 'http://localhost:5173'    # React dev server
+              - !Sub 'https://${ProjectName}.example.com'  # Production domain
+            MaxAge: 3600
+      LifecycleConfiguration:
+        Rules:
+          - Id: CleanupOldImages
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 90
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-product-images-${Environment}"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: ProductImages
+
+  # ── BUCKET 5: React SPA (Frontend) ─────────────────────────────────────────
+  # Stores the compiled React + Vite frontend (the output of `npm run build`).
+  # The `dist/` folder is uploaded here by CodePipeline.
+  # Served to users via CloudFront — not directly accessible as a website.
+  #
+  # Why not use S3 Static Website Hosting?
+  # S3 website hosting only serves HTTP (not HTTPS) and has a fixed URL format.
+  # CloudFront gives you HTTPS, custom domain, and global edge caching.
+  SPABucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-spa-${Environment}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      # S3 Static Website Hosting — serves index.html for ALL routes.
+      # React Router uses client-side routing: every URL (e.g. /orders/123)
+      # must return index.html so React can handle it. Without ErrorDocument
+      # pointing to index.html, deep links return a 403/404 from S3.
+      # Production: put CloudFront in front for HTTPS + caching.
+      # Dev: access via the S3 website endpoint URL below.
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-spa-${Environment}"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: FrontendSPA
+
+# ─────────────────────────────────────────────────────────────
+# OUTPUTS
+# These bucket names and ARNs are exported so other stacks
+# (EC2 user data, CodePipeline, Lambda, RDS) can reference them.
+# ─────────────────────────────────────────────────────────────
+Outputs:
+
+  ArtifactsBucketName:
+    Description: S3 bucket for application JARs and build outputs
+    Value: !Ref ArtifactsBucket
+    Export:
+      Name: !Sub "${ProjectName}-artifacts-bucket"
+
+  ArtifactsBucketArn:
+    Description: ARN of the artifacts bucket (used in IAM policy conditions)
+    Value: !GetAtt ArtifactsBucket.Arn
+    Export:
+      Name: !Sub "${ProjectName}-artifacts-bucket-arn"
+
+  CICDArtifactsBucketName:
+    Description: S3 bucket for CodePipeline artifacts
+    Value: !Ref CICDArtifactsBucket
+    Export:
+      Name: !Sub "${ProjectName}-cicd-bucket"
+
+  CICDArtifactsBucketArn:
+    Description: ARN of the CI/CD artifacts bucket
+    Value: !GetAtt CICDArtifactsBucket.Arn
+    Export:
+      Name: !Sub "${ProjectName}-cicd-bucket-arn"
+
+  RDSExportsBucketName:
+    Description: S3 bucket for RDS snapshot exports
+    Value: !Ref RDSExportsBucket
+    Export:
+      Name: !Sub "${ProjectName}-rds-exports-bucket"
+
+  ProductImagesBucketName:
+    Description: S3 bucket for product images (served via CloudFront)
+    Value: !Ref ProductImagesBucket
+    Export:
+      Name: !Sub "${ProjectName}-images-bucket"
+
+  ProductImagesBucketArn:
+    Description: ARN of the product images bucket
+    Value: !GetAtt ProductImagesBucket.Arn
+    Export:
+      Name: !Sub "${ProjectName}-images-bucket-arn"
+
+  SPABucketName:
+    Description: S3 bucket for the React SPA build output
+    Value: !Ref SPABucket
+    Export:
+      Name: !Sub "${ProjectName}-spa-bucket"
+
+  SPABucketWebsiteURL:
+    Description: S3 website endpoint — open this in a browser to test the SPA
+    Value: !GetAtt SPABucket.WebsiteURL
+    Export:
+      Name: !Sub "${ProjectName}-spa-website-url"

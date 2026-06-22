@@ -1,0 +1,191 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ShopFlow Lambda — Module 14: Serverless Functions
+  Creates Lambda functions for email notifications and order processing.
+  Functions are triggered by SQS queues (Module 12).
+  NOTE: Lambda function code is deployed separately (not in this template).
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: shopflow
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, production]
+
+  LambdaRoleArn:
+    Type: String
+    Description: >
+      ARN of the Lambda IAM role (shopflow-lambda-role).
+      Get it with: aws iam get-role --role-name shopflow-lambda-role --query "Role.Arn" --output text
+    Default: ""
+
+# ─────────────────────────────────────────────────────────────
+# CONCEPT: AWS Lambda
+#
+# Lambda runs a function in response to an event — no server to
+# manage. A function wakes up, processes one event, and sleeps.
+# You pay only for execution time (per millisecond).
+#
+# KEY CONCEPTS:
+#
+#  1. TRIGGER: what causes the function to run.
+#     - SQS: Lambda polls the queue and invokes the function
+#       with a batch of messages.
+#     - SNS: Lambda is subscribed to a topic.
+#     - API Gateway: HTTP request triggers the function.
+#     - EventBridge: scheduled (cron) or event-based trigger.
+#     ShopVerse uses SQS triggers.
+#
+#  2. RUNTIME: the language the function runs in.
+#     We use Java 21 (same as Spring Boot — reuse the same model classes).
+#     Other options: Python, Node.js, Go, Ruby, .NET.
+#
+#  3. HANDLER: the entry point method.
+#     For Java: com.shopverse.lambda.NotificationHandler::handleRequest
+#     Lambda calls this method with the SQS event payload.
+#
+#  4. TIMEOUT: max execution time per invocation (1 second to 15 minutes).
+#     Email sending should complete in < 10 seconds. Set to 60s with buffer.
+#
+#  5. CONCURRENCY: Lambda scales by running many copies simultaneously.
+#     If 100 SQS messages arrive at once, Lambda can run 100 concurrent
+#     function instances. No configuration needed — automatic.
+#
+#  6. COLD START: first invocation of a dormant function takes longer
+#     (~1-2 seconds for Java — JVM initialization).
+#     Subsequent invocations are fast (warm container reused).
+#     Java has longer cold starts than Node/Python. For ShopVerse's async
+#     email use case, this is acceptable.
+#
+#  7. DEPLOYMENT PACKAGE: your code + dependencies zipped, uploaded to S3,
+#     then referenced in the function. This template defines the function
+#     configuration; CodeBuild (Module 17) deploys the code.
+#
+#  8. FUNCTION URL: Lambda can have a public HTTPS endpoint without
+#     needing API Gateway. Useful for webhook receivers.
+# ─────────────────────────────────────────────────────────────
+
+Resources:
+
+  # ── CloudWatch Log Groups ─────────────────────────────────────────────────────
+  # Lambda auto-creates log groups, but explicit creation lets us control retention.
+  NotificationLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-email-notifier-${Environment}"
+      RetentionInDays: 30
+
+  OrderProcessorLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-order-processor-${Environment}"
+      RetentionInDays: 30
+
+  # ── Email Notification Lambda ────────────────────────────────────────────────
+  # Reads from shopflow-notifications SQS queue.
+  # Placeholder: Python inline code for learning. Replace with Java JAR via
+  # CodeBuild (Module 17) when real application code is ready.
+  NotificationLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-email-notifier-${Environment}"
+      Description: "Sends transactional emails (order confirmation, shipping updates). Triggered by shopflow-notifications SQS queue."
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !Ref LambdaRoleArn
+      # Inline code — no S3 upload needed for this placeholder
+      Code:
+        ZipFile: |
+          import json
+          def handler(event, context):
+              for record in event.get('Records', []):
+                  body = json.loads(record['body'])
+                  print(f"[EMAIL] Order confirmed: {body.get('orderId')} → {body.get('customerEmail')}")
+              return {"statusCode": 200}
+      MemorySize: 128
+      Timeout: 60
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          LOG_LEVEL: INFO
+      # NOTE: VpcConfig removed for learning — add back when Lambda needs to
+      # reach RDS or Redis in private subnets (requires VPC exports from Module 2).
+      # ReservedConcurrentExecutions omitted — dev account uses unreserved pool.
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # SQS trigger for the notification Lambda:
+  # Lambda polls shopflow-notifications queue; invokes function with batches.
+  NotificationLambdaTrigger:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !ImportValue shopflow-notification-queue-arn
+      FunctionName: !Ref NotificationLambda
+      BatchSize: 10          # Process up to 10 messages per invocation
+      MaximumBatchingWindowInSeconds: 5  # Wait up to 5s to collect a batch
+      Enabled: true
+      # On failure: send failed batch info to DLQ (handled by SQS maxReceiveCount)
+      FunctionResponseTypes:
+        - ReportBatchItemFailures  # Partial success: only re-queue failed items
+
+  # ── Order Processor Lambda ────────────────────────────────────────────────────
+  # Reads from shopflow-order-events queue.
+  # Placeholder: Python inline code for learning. Replace with Java JAR via
+  # CodeBuild (Module 17) when real application code is ready.
+  OrderProcessorLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-order-processor-${Environment}"
+      Description: "Processes order events from SQS: updates inventory, triggers fulfillment."
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !Ref LambdaRoleArn
+      Code:
+        ZipFile: |
+          import json
+          def handler(event, context):
+              for record in event.get('Records', []):
+                  body = json.loads(record['body'])
+                  print(f"[ORDER] Processing order: {body.get('orderId')} status={body.get('status')}")
+              return {"statusCode": 200}
+      MemorySize: 128
+      Timeout: 60
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+      # ReservedConcurrentExecutions omitted — dev account uses unreserved pool.
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  OrderProcessorLambdaTrigger:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !ImportValue shopflow-order-event-queue-arn
+      FunctionName: !Ref OrderProcessorLambda
+      BatchSize: 5
+      MaximumBatchingWindowInSeconds: 10
+      Enabled: true
+      FunctionResponseTypes:
+        - ReportBatchItemFailures
+
+Outputs:
+  NotificationLambdaArn:
+    Description: ARN of the email notification Lambda
+    Value: !GetAtt NotificationLambda.Arn
+    Export:
+      Name: !Sub "${ProjectName}-notification-lambda-arn"
+
+  OrderProcessorLambdaArn:
+    Description: ARN of the order processor Lambda
+    Value: !GetAtt OrderProcessorLambda.Arn
+    Export:
+      Name: !Sub "${ProjectName}-order-processor-lambda-arn"

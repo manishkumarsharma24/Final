@@ -1,0 +1,219 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ShopFlow ElastiCache — Module 7: Managed Redis
+  Creates a single-node Redis 7.x cluster for ShopVerse.
+  Uses private subnets from Module 2 (VPC).
+  Credentials (AUTH token) stored in Secrets Manager (Module 4).
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: shopflow
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, production]
+
+  NodeType:
+    Type: String
+    Default: cache.t3.micro
+    Description: >
+      Redis node size. cache.t3.micro is the smallest (0.5 GB RAM).
+      For ShopVerse in production: cache.r6g.large (13 GB RAM) or larger.
+    AllowedValues:
+      - cache.t3.micro    # 0.5 GB RAM — free tier eligible (750 hours/month)
+      - cache.t3.small    # 1.5 GB RAM
+      - cache.t3.medium   # 3.1 GB RAM
+
+# ─────────────────────────────────────────────────────────────
+# CONCEPT: Amazon ElastiCache for Redis
+#
+# ElastiCache manages a Redis server for you — AWS handles
+# patching, failover, and backups. Your Spring Boot app connects
+# via the standard Redis protocol, exactly as it does locally.
+# Only the hostname changes.
+#
+# SHOPVERSE USES REDIS FOR 8 THINGS:
+#  1. JWT Session Store (RedisSessionStore.java):
+#     Key: session:{token} → TTL: 24 hours
+#     Every API request validates the JWT here instead of DB lookup.
+#
+#  2. Product Cache (CachedProductService.java):
+#     Key: products::{id} → TTL: 30 minutes
+#     @Cacheable / @CacheEvict via Spring Cache abstraction.
+#
+#  3. Order Cache (OrderCacheService.java):
+#     Key: orders::{id} → TTL: 5 minutes
+#     Manual RedisTemplate, set/get/evict.
+#
+#  4. Rate Limiter (RedisSessionStore.java):
+#     Key: rate:{ip} → INCR + EXPIRE Lua script
+#     Atomic check-and-increment, rejects after N requests/minute.
+#
+#  5. Shopping Cart:
+#     Key: cart:{userId} → Redis Hash (field=productId, value=qty)
+#     HSET / HGET / HDEL operations.
+#
+#  6. Distributed Locks (DistributedLockService.java / Redisson):
+#     Key: lock:{resource} → TTL: 5 seconds
+#     Prevents race conditions in order placement.
+#
+#  7. Pub/Sub (RedisPubSubPublisher.java):
+#     Channel: low-stock-alerts → broadcast to all subscribers.
+#
+#  8. Recently Viewed / Leaderboard:
+#     List (LPUSH/LTRIM) and Sorted Set (ZADD/ZRANGE) structures.
+#
+# SINGLE NODE vs CLUSTER MODE:
+#  Single Node (this template): one Redis instance. Simple.
+#  Cluster Mode: data sharded across multiple nodes. Needed only
+#  when data exceeds one node's RAM or throughput. For learning
+#  and dev, single node is sufficient.
+#
+# AUTH TOKEN:
+#  ElastiCache requires an AUTH token (password) for all connections.
+#  The token is stored in Secrets Manager (/shopflow/app/redis-auth).
+#  Spring Boot configures it via: spring.data.redis.password=${REDIS_AUTH_TOKEN}
+#
+# IN-TRANSIT ENCRYPTION:
+#  TLS encryption between your app and Redis. Required when using AUTH.
+#  Spring Boot enables it via: spring.data.redis.ssl.enabled=true
+# ─────────────────────────────────────────────────────────────
+
+Resources:
+
+  # ── Subnet Group ─────────────────────────────────────────────────────────────
+  # Same concept as RDS subnet group — tells ElastiCache which subnets to use.
+  # Must span at least 2 AZs for potential future Multi-AZ support.
+  RedisSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      CacheSubnetGroupName: !Sub "${ProjectName}-redis-subnet-group"
+      Description: "Private subnets for ShopFlow ElastiCache Redis"
+      SubnetIds:
+        - !ImportValue shopflow-prv-subnet-1a
+        - !ImportValue shopflow-prv-subnet-1b
+
+  # ── Redis Parameter Group ─────────────────────────────────────────────────────
+  # Custom Redis settings for the ShopVerse workload.
+  # redis7 family = Redis 7.x compatible.
+  RedisParameterGroup:
+    Type: AWS::ElastiCache::ParameterGroup
+    Properties:
+      CacheParameterGroupFamily: redis7
+      Description: "Redis 7 parameters for ShopVerse — optimised for session + cache workload"
+      Properties:
+        # Max memory policy: when Redis runs out of memory, which keys to evict?
+        # allkeys-lru: evict the least-recently-used key (from any key).
+        # This is the right choice for a cache — old/stale data is evicted first.
+        # Alternative: volatile-lru (only evict keys with TTL set — too restrictive
+        # for ShopVerse because some keys like locks have no TTL).
+        maxmemory-policy: "allkeys-lru"
+
+        # Slow log: log Redis commands taking longer than 10ms.
+        # Useful for finding unexpectedly slow Lua scripts or large key reads.
+        slowlog-log-slower-than: "10000"   # microseconds = 10ms
+        slowlog-max-len: "128"
+
+        # TCP keepalive: detect dead connections every 300 seconds.
+        tcp-keepalive: "300"
+
+  # ── Redis Replication Group (the actual cluster) ──────────────────────────────
+  # A "ReplicationGroup" in ElastiCache is the container for Redis nodes.
+  # Even for a single-node Redis, ElastiCache uses this resource type.
+  #
+  # For a single-node setup:
+  #   NumCacheClusters: 1 (one primary, no replicas)
+  #   AutomaticFailoverEnabled: false (no replica to fail over to)
+  #
+  # To add a read replica later:
+  #   NumCacheClusters: 2 + AutomaticFailoverEnabled: true
+  #   No data loss, no downtime — ElastiCache handles it.
+  RedisReplicationGroup:
+    Type: AWS::ElastiCache::ReplicationGroup
+    Properties:
+      ReplicationGroupId: !Sub "${ProjectName}-redis-${Environment}"
+      ReplicationGroupDescription: !Sub "ShopVerse Redis cache cluster for ${Environment}"
+
+      # Node configuration
+      CacheNodeType: !Ref NodeType
+      Engine: redis
+      EngineVersion: "7.1"
+      NumCacheClusters: 1          # Single node — no replicas for dev
+      AutomaticFailoverEnabled: false  # Requires >= 2 nodes
+
+      # Network
+      CacheSubnetGroupName: !Ref RedisSubnetGroup
+      SecurityGroupIds:
+        # Use the EC2 security group as a source for Redis access.
+        # In production you'd create a dedicated ElastiCache SG.
+        # For now, EC2/ECS instances (same SG) can reach Redis port 6379.
+        - !ImportValue shopflow-ec2-sg-id
+
+      # Parameter group
+      CacheParameterGroupName: !Ref RedisParameterGroup
+
+      # AUTH token for password-protected connections.
+      # Reference from Secrets Manager using dynamic resolution.
+      # ElastiCache requirement: 16-128 alphanumeric characters.
+      AuthToken: !Sub "{{resolve:secretsmanager:/${ProjectName}/app/redis-auth:SecretString:auth_token}}"
+
+      # Encryption
+      AtRestEncryptionEnabled: true   # Encrypt data stored on disk (AOF / RDB snapshots)
+      TransitEncryptionEnabled: true  # TLS between app and Redis — REQUIRED when using AuthToken
+
+      # Snapshots (Redis equivalent of RDS backups)
+      SnapshotRetentionLimit: 3       # Keep 3 daily snapshots
+      SnapshotWindow: "03:00-04:00"   # 3–4 AM UTC daily snapshot
+
+      # Maintenance window (engine version upgrades)
+      PreferredMaintenanceWindow: "sun:05:00-sun:06:00"  # Sunday 5 AM UTC
+
+      # Publish Redis events (evictions, keyspace notifications) to CloudWatch Logs
+      LogDeliveryConfigurations:
+        - DestinationType: cloudwatch-logs
+          LogFormat: json
+          LogType: slow-log
+          DestinationDetails:
+            CloudWatchLogsDetails:
+              LogGroup: !Sub "/aws/elasticache/${ProjectName}-redis-${Environment}/slow-log"
+        - DestinationType: cloudwatch-logs
+          LogFormat: json
+          LogType: engine-log
+          DestinationDetails:
+            CloudWatchLogsDetails:
+              LogGroup: !Sub "/aws/elasticache/${ProjectName}-redis-${Environment}/engine-log"
+
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-redis-${Environment}"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+# ─────────────────────────────────────────────────────────────
+# OUTPUTS
+# ─────────────────────────────────────────────────────────────
+Outputs:
+
+  RedisPrimaryEndpoint:
+    Description: >
+      Redis primary endpoint hostname. COPY THIS and update SSM parameter
+      /shopflow/dev/redis/endpoint after this stack deploys.
+    Value: !GetAtt RedisReplicationGroup.PrimaryEndPoint.Address
+    Export:
+      Name: !Sub "${ProjectName}-redis-endpoint"
+
+  RedisPort:
+    Description: Redis port (6379)
+    Value: !GetAtt RedisReplicationGroup.PrimaryEndPoint.Port
+    Export:
+      Name: !Sub "${ProjectName}-redis-port"
+
+  RedisReplicationGroupId:
+    Description: ElastiCache Replication Group ID
+    Value: !Ref RedisReplicationGroup
+    Export:
+      Name: !Sub "${ProjectName}-redis-group-id"

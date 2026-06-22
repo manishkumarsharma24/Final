@@ -1,0 +1,217 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ShopFlow IAM - Step 4: Users
+  Creates all 10 IAM users and assigns them to groups.
+  Deploy AFTER 02_iam_groups.yaml
+  NOTE: Passwords are set via Parameters - change them after first login.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: shopflow
+    Description: Project name used as prefix for all resources
+
+  DefaultPassword:
+    Type: String
+    Default: ShopFlow@2024!
+    NoEcho: true
+    Description: >
+      Temporary password for all new users.
+      Users MUST change this on first login.
+      Minimum 12 chars, uppercase, lowercase, number, special char.
+
+Resources:
+
+  # ── DEVOPS USERS (2) ───────────────────────────────────────────────────────
+  UserManishAdmin:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: manish-admin
+      LoginProfile:
+        Password: !Ref DefaultPassword
+        PasswordResetRequired: true
+      Groups:
+        - !ImportValue
+          Fn::Sub: "${ProjectName}-devops-group"
+      Tags:
+        - Key: Team
+          Value: !Ref ProjectName
+        - Key: Role
+          Value: Lead DevOps Admin
+        - Key: Group
+          Value: devops
+
+  UserDevOpsEng1:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: devops-eng1
+      LoginProfile:
+        Password: !Ref DefaultPassword
+        PasswordResetRequired: true
+      Groups:
+        - !ImportValue
+          Fn::Sub: "${ProjectName}-devops-group"
+      Tags:
+        - Key: Team
+          Value: !Ref ProjectName
+        - Key: Role
+          Value: DevOps Engineer
+        - Key: Group
+          Value: devops
+
+  # ── SENIOR DEVELOPER USERS (3) ────────────────────────────────────────────
+  UserSeniorDev1:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: seniordev1
+      LoginProfile:
+        Password: !Ref DefaultPassword
+        PasswordResetRequired: true
+      Groups:
+        - !ImportValue
+          Fn::Sub: "${ProjectName}-seniordevs-group"
+      Tags:
+        - Key: Team
+          Value: !Ref ProjectName
+        - Key: Role
+          Value: Senior Backend Developer
+        - Key: Group
+          Value: senior-devs
+
+  UserSeniorDev2:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: seniordev2
+      LoginProfile:
+        Password: !Ref DefaultPassword
+        PasswordResetRequired: true
+      Groups:
+        - !ImportValue
+          Fn::Sub: "${ProjectName}-seniordevs-group"
+      Tags:
+        - Key: Team
+          Value: !Ref ProjectName
+        - Key: Role
+          Value: Senior Backend Developer
+        - Key: Group
+          Value: senior-devs
+
+  UserSeniorDev3:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: seniordev3
+      LoginProfile:
+        Password: !Ref DefaultPassword
+        PasswordResetRequired: true
+      Groups:
+        - !ImportValue
+          Fn::Sub: "${ProjectName}-seniordevs-group"
+      Tags:
+        - Key: Team
+          Value: !Ref ProjectName
+        - Key: Role
+          Value: Senior Fullstack Developer
+        - Key: Group
+          Value: senior-devs
+
+  # ── DEVELOPER USERS (3) ───────────────────────────────────────────────────
+  UserDev1:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: dev1
+      LoginProfile:
+        Password: !Ref DefaultPassword
+        PasswordResetRequired: true
+      Groups:
+        - !ImportValue
+          Fn::Sub: "${ProjectName}-developers-group"
+      Tags:
+        - Key: Team
+          Value: !Ref ProjectName
+        - Key: Role
+          Value: Backend Developer
+        - Key: Group
+          Value: developers
+
+  UserDev2:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: dev2
+      LoginProfile:
+        Password: !Ref DefaultPassword
+        PasswordResetRequired: true
+      Groups:
+        - !ImportValue
+          Fn::Sub: "${ProjectName}-developers-group"
+      Tags:
+        - Key: Team
+          Value: !Ref ProjectName
+        - Key: Role
+          Value: Backend Developer
+        - Key: Group
+          Value: developers
+
+  UserDev3:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: dev3
+      LoginProfile:
+        Password: !Ref DefaultPassword
+        PasswordResetRequired: true
+      Groups:
+        - !ImportValue
+          Fn::Sub: "${ProjectName}-developers-group"
+      Tags:
+        - Key: Team
+          Value: !Ref ProjectName
+        - Key: Role
+          Value: Fullstack Developer
+        - Key: Group
+          Value: developers
+
+  # ── READ ONLY USERS (2) ───────────────────────────────────────────────────
+  UserQA1:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: qa1
+      LoginProfile:
+        Password: !Ref DefaultPassword
+        PasswordResetRequired: true
+      Groups:
+        - !ImportValue
+          Fn::Sub: "${ProjectName}-readonly-group"
+      Tags:
+        - Key: Team
+          Value: !Ref ProjectName
+        - Key: Role
+          Value: QA Engineer
+        - Key: Group
+          Value: readonly
+
+  UserJuniorDev1:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: junior-dev1
+      LoginProfile:
+        Password: !Ref DefaultPassword
+        PasswordResetRequired: true
+      Groups:
+        - !ImportValue
+          Fn::Sub: "${ProjectName}-readonly-group"
+      Tags:
+        - Key: Team
+          Value: !Ref ProjectName
+        - Key: Role
+          Value: Junior Developer
+        - Key: Group
+          Value: readonly
+
+Outputs:
+
+  ManishAdminArn:
+    Description: ARN of manish-admin user
+    Value: !GetAtt UserManishAdmin.Arn
+
+  AllUsersCreated:
+    Description: Confirmation that all 10 users were created
+    Value: "manish-admin, devops-eng1, seniordev1, seniordev2, seniordev3, dev1, dev2, dev3, qa1, junior-dev1"

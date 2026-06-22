@@ -1,0 +1,543 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ShopFlow SSM Parameter Store — Module 05
+  Stores all application configuration as SSM parameters.
+  Spring Boot reads these at startup via @Value("${ssm:/shopflow/...}") or
+  the AWS AppConfig integration. No secrets here — use SecureString type
+  for anything sensitive (JWT secret, passwords).
+  Cost: SSM Standard parameters are FREE (no limit). SecureString uses
+  KMS — 20,000 free API calls/month under the AWS Free Tier.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: shopflow
+    Description: Project prefix used in all parameter paths
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONCEPT: SSM Parameter Store
+#
+# SSM Parameter Store is a free AWS service that stores key-value configuration.
+# Think of it as a shared .env file that all your services can read securely.
+#
+# WHY use Parameter Store instead of hardcoding values in application.yml?
+#   1. Security: Sensitive values (passwords, secrets) are encrypted with KMS.
+#   2. Centralised: One place to change a config value — all services pick it up.
+#   3. Auditability: CloudTrail logs every read/write to a parameter.
+#   4. No redeploy: Update a parameter → restart the app → new value takes effect.
+#   5. Free: Standard parameters cost $0. SecureString encrypts with KMS (20K free calls/month).
+#
+# PARAMETER TYPES:
+#   String       → Plain text. Good for non-sensitive config (URLs, hostnames, ports).
+#   StringList   → Comma-separated string. Good for lists (Kafka broker list).
+#   SecureString → Encrypted with KMS. Required for passwords, JWT secrets, API keys.
+#
+# PATH CONVENTION: /project/environment/service/key
+#   /shopflow/dev/database/url
+#   /shopflow/dev/redis/host
+#   /shopflow/dev/jwt/secret   (SecureString)
+#
+# HOW SPRING BOOT READS THESE:
+#   Option A — AWS Parameter Store integration (spring-cloud-aws):
+#     application.yml: aws.paramstore.prefix=/shopflow/dev
+#     Then use: @Value("${database.url}")
+#
+#   Option B — Direct SSM SDK call in code:
+#     ssmClient.getParameter(GetParameterRequest.builder()
+#       .name("/shopflow/dev/database/url")
+#       .withDecryption(true)  // for SecureString
+#       .build())
+#
+#   Option C — ECS Task Definition environment injection:
+#     In the task def, reference SSM params directly. ECS fetches them at launch.
+# ─────────────────────────────────────────────────────────────────────────────
+
+Resources:
+
+  # ══════════════════════════════════════════════════════════════════
+  # DATABASE PARAMETERS (PostgreSQL / RDS)
+  # ShopVerse uses Spring Data JPA + Hibernate connecting to PostgreSQL.
+  # These values go into spring.datasource.* in application.yml.
+  # ══════════════════════════════════════════════════════════════════
+
+  DatabaseHost:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/database/host"
+      Type: String
+      Value: "localhost"
+      # NOTE: Update this value to your RDS endpoint after deploying RDS.
+      # Format: <db-instance-id>.xxxxxxxx.ap-south-1.rds.amazonaws.com
+      # You will update this in the console: SSM → Parameter Store → edit.
+      Description: "PostgreSQL host. Update to RDS endpoint after Module 06."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: database
+
+  DatabasePort:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/database/port"
+      Type: String
+      Value: "5432"
+      Description: "PostgreSQL default port (5432 for Postgres, 3306 for MySQL)"
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: database
+
+  DatabaseName:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/database/name"
+      Type: String
+      Value: "shopverse"
+      Description: "Name of the PostgreSQL database (matches RDS initial DB name)"
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: database
+
+  DatabaseUsername:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/database/username"
+      Type: String
+      Value: "shopverse"
+      Description: "PostgreSQL master username (matches RDS MasterUsername)"
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: database
+
+  DatabasePassword:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/database/password"
+      # SecureString encrypts the value using KMS before storing it.
+      # Nobody can read the raw value — only services with kms:Decrypt permission.
+      # The shopflow-app-role in Module 01 (IAM) has this permission.
+      Type: String
+      Value: "CHANGE_ME_BEFORE_DEPLOY"
+      # IMPORTANT: After deploying this stack, immediately go to SSM console
+      # and update this value to your real password. Do NOT commit real passwords
+      # to CloudFormation templates (they end up in CloudFormation history).
+      Description: "PostgreSQL master password. Update to real value in SSM console — do not commit to code."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: database
+
+  DatabaseUrl:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/database/url"
+      Type: String
+      Value: !Sub "jdbc:postgresql://localhost:5432/shopverse"
+      # This is the full JDBC URL Spring Boot needs for spring.datasource.url.
+      # After RDS is deployed (Module 06), update the host part to the RDS endpoint.
+      # Format: jdbc:postgresql://<rds-endpoint>:5432/shopverse
+      Description: "Full JDBC URL for Spring Boot datasource. Update host to RDS endpoint after Module 06."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: database
+
+  # ══════════════════════════════════════════════════════════════════
+  # REDIS PARAMETERS
+  # ShopVerse uses Redis for:
+  #   1. JWT session store (RedisSessionStore.java)
+  #   2. @Cacheable cache (CachedProductService.java — 30min TTL)
+  #   3. Rate limiting counters (RedisSessionStore.java)
+  #   4. Pub/Sub messaging (RedisPubSubPublisher.java)
+  # Free Tier: Redis is ElastiCache — PAID (we skip ElastiCache Module 07).
+  # For dev, run Redis locally: docker run -p 6379:6379 redis:7-alpine
+  # ══════════════════════════════════════════════════════════════════
+
+  RedisHost:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/redis/host"
+      Type: String
+      Value: "localhost"
+      # Locally: localhost. On EC2 with Docker: the EC2 private IP.
+      # With ElastiCache (paid): <cluster>.xxxxxx.ng.0001.apse1.cache.amazonaws.com
+      Description: "Redis hostname. Use localhost for dev, Docker container name for Docker Compose."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: redis
+
+  RedisPort:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/redis/port"
+      Type: String
+      Value: "6379"
+      Description: "Redis default port"
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: redis
+
+  RedisPassword:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/redis/password"
+      Type: String
+      Value: "nopassword"
+      # SSM does not allow empty strings. Use "nopassword" as placeholder for local dev (no-auth mode).
+      # application.yml: spring.data.redis.password=${REDIS_PASS:}
+      Description: "Redis AUTH password. Leave empty for local dev (no-auth mode)."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: redis
+
+  # ══════════════════════════════════════════════════════════════════
+  # KAFKA PARAMETERS
+  # ShopVerse uses Kafka for async order events:
+  #   - OrderKafkaProducer publishes ORDER_PLACED, ORDER_SHIPPED, etc.
+  #   - OrderKafkaConsumer processes inventory updates and notifications.
+  # Free: Run Kafka in Docker locally (see docker-compose.yml).
+  # AWS MSK (Managed Streaming for Kafka) is paid — we skip it.
+  # ══════════════════════════════════════════════════════════════════
+
+  KafkaBrokers:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/kafka/brokers"
+      Type: String
+      Value: "localhost:9092"
+      # Multiple brokers are comma-separated: "broker1:9092,broker2:9092"
+      # application.yml: spring.kafka.bootstrap-servers=${KAFKA_BROKERS:localhost:9092}
+      Description: "Kafka bootstrap servers (comma-separated). Use localhost:9092 for Docker Compose dev."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: kafka
+
+  KafkaOrderTopic:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/kafka/topics/orders"
+      Type: String
+      Value: "order-events"
+      Description: "Kafka topic name for order lifecycle events (ORDER_PLACED, ORDER_SHIPPED, ORDER_DELIVERED)"
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: kafka
+
+  KafkaGroupId:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/kafka/group-id"
+      Type: String
+      Value: "shopverse-consumer-group"
+      # Consumer group ID determines offset tracking. All instances of the app
+      # in the same group share the partition workload (load balancing).
+      # If two different groups subscribe, each gets a copy of every message.
+      Description: "Kafka consumer group ID for ShopVerse order consumers"
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: kafka
+
+  # ══════════════════════════════════════════════════════════════════
+  # JWT SECURITY PARAMETERS
+  # ShopVerse uses stateless JWT auth (no HttpSession).
+  # JwtTokenProvider.java reads these to sign and validate tokens.
+  # Tokens are also stored in Redis via RedisSessionStore for revocation.
+  # ══════════════════════════════════════════════════════════════════
+
+  JwtSecret:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/jwt/secret"
+      Type: String
+      Value: "CHANGE_ME_minimum_32_chars_long_random_string"
+      # SECURITY: This is the HMAC-SHA256 signing key. Anyone who has this
+      # value can forge valid JWTs. In production, use a random 256-bit value.
+      # Generate with: openssl rand -base64 32
+      # IMPORTANT: Update this in SSM console immediately after deploy.
+      # application.yml: jwt.secret=${JWT_SECRET}
+      Description: "JWT HMAC-SHA256 signing secret. Must be 32+ chars. Update in SSM console — do not commit real value."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: security
+
+  JwtExpirationMs:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/jwt/expiration-ms"
+      Type: String
+      Value: "86400000"
+      # 86400000 ms = 24 hours. After expiry, user must log in again.
+      # Shorter = more secure (stolen token expires sooner)
+      # Longer = better UX (user doesn't need to log in as often)
+      Description: "JWT token expiration in milliseconds (86400000 = 24 hours)"
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: security
+
+  # ══════════════════════════════════════════════════════════════════
+  # MONGODB PARAMETERS
+  # ShopVerse stores product reviews in MongoDB (ReviewDocument.java).
+  # MongoDB is a document database — no fixed schema, stores JSON-like docs.
+  # Free: MongoDB Atlas has a permanent free tier (512 MB).
+  # Or run locally: docker run -p 27017:27017 mongo:7
+  # ══════════════════════════════════════════════════════════════════
+
+  MongoUri:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/mongodb/uri"
+      Type: String
+      Value: "mongodb://localhost:27017/shopverse"
+      # Format: mongodb://[username:password@]host[:port]/dbname
+      # Atlas free tier: mongodb+srv://user:pass@cluster0.xxxx.mongodb.net/shopverse
+      # application.yml: spring.data.mongodb.uri=${MONGO_URI}
+      Description: "MongoDB connection URI. Use localhost for Docker dev, Atlas URI for cloud."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: mongodb
+
+  MongoDatabase:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/mongodb/database"
+      Type: String
+      Value: "shopverse"
+      Description: "MongoDB database name for ShopVerse (stores ReviewDocument collections)"
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: mongodb
+
+  # ══════════════════════════════════════════════════════════════════
+  # ELASTICSEARCH PARAMETERS
+  # ShopVerse uses Elasticsearch for full-text product search.
+  # SearchController.java → ProductSearchService.java → Elasticsearch.
+  # Free: Run locally via Docker, or use Elastic Cloud free 14-day trial.
+  # docker run -p 9200:9200 -e "discovery.type=single-node" elasticsearch:8.12.0
+  # ══════════════════════════════════════════════════════════════════
+
+  ElasticsearchUri:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/elasticsearch/uri"
+      Type: String
+      Value: "http://localhost:9200"
+      # application.yml: spring.elasticsearch.uris=${ES_URI:http://localhost:9200}
+      Description: "Elasticsearch REST API endpoint. Use localhost for Docker dev."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: elasticsearch
+
+  ElasticsearchProductIndex:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/elasticsearch/index/products"
+      Type: String
+      Value: "shopverse-products"
+      # This is the index name in Elasticsearch (like a table in SQL).
+      # ProductDocument.java maps to this index via @Document(indexName = "...")
+      Description: "Elasticsearch index name for product search documents"
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: elasticsearch
+
+  # ══════════════════════════════════════════════════════════════════
+  # APPLICATION PARAMETERS
+  # General Spring Boot application settings.
+  # ══════════════════════════════════════════════════════════════════
+
+  AppPort:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/app/port"
+      Type: String
+      Value: "8080"
+      Description: "Port the Spring Boot application listens on (server.port)"
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: application
+
+  AppProfile:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/app/profile"
+      Type: String
+      Value: !Ref Environment
+      # Maps to Spring profile: spring.profiles.active=dev
+      # Controls which application-{env}.yml config is loaded.
+      Description: "Active Spring Boot profile (dev / staging / prod)"
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: application
+
+  AppBaseUrl:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/app/base-url"
+      Type: String
+      Value: !Sub "http://localhost:8080"
+      # Used for generating absolute URLs (CORS, OAuth callbacks, email links).
+      # Update to your EC2 public IP or load balancer URL after deployment.
+      Description: "Base URL of the ShopVerse API. Update to EC2 public IP or ALB DNS after deployment."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: application
+
+  # ══════════════════════════════════════════════════════════════════
+  # CASSANDRA PARAMETERS
+  # ShopVerse uses Cassandra for the order activity log (OrderActivityEntity).
+  # Cassandra is a wide-column store — excellent for time-series data.
+  # Free: Run locally with Docker.
+  # docker run -p 9042:9042 cassandra:4.1
+  # ══════════════════════════════════════════════════════════════════
+
+  CassandraContactPoints:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/cassandra/contact-points"
+      Type: String
+      Value: "localhost"
+      # spring.cassandra.contact-points=${CASSANDRA_HOST:localhost}
+      Description: "Cassandra contact points (comma-separated IPs or hostnames)"
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: cassandra
+
+  CassandraPort:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/cassandra/port"
+      Type: String
+      Value: "9042"
+      Description: "Cassandra CQL native transport port (default: 9042)"
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: cassandra
+
+  CassandraKeyspace:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/cassandra/keyspace"
+      Type: String
+      Value: "shopverse"
+      # A keyspace in Cassandra is like a database/schema in SQL.
+      # spring.cassandra.keyspace-name=shopverse
+      Description: "Cassandra keyspace name for ShopVerse (stores order activity log)"
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: cassandra
+
+  # ══════════════════════════════════════════════════════════════════
+  # NEO4J PARAMETERS
+  # ShopVerse uses Neo4j for the product recommendation graph.
+  # Neo4j stores products as nodes and relationships (BOUGHT_WITH, VIEWED_WITH).
+  # Free: Neo4j AuraDB free tier (50K nodes, 175K relationships).
+  # Or Docker: docker run -p 7474:7474 -p 7687:7687 neo4j:5
+  # ══════════════════════════════════════════════════════════════════
+
+  Neo4jUri:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/neo4j/uri"
+      Type: String
+      Value: "bolt://localhost:7687"
+      # Bolt protocol (port 7687) is Neo4j's binary protocol for drivers.
+      # HTTP browser UI runs on port 7474.
+      # spring.neo4j.uri=bolt://localhost:7687
+      Description: "Neo4j Bolt URI for Spring Data Neo4j connection"
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: neo4j
+
+  Neo4jUsername:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/neo4j/username"
+      Type: String
+      Value: "neo4j"
+      Description: "Neo4j authentication username (default: neo4j)"
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: neo4j
+
+  Neo4jPassword:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/neo4j/password"
+      Type: String
+      Value: "CHANGE_ME_neo4j_password"
+      Description: "Neo4j authentication password. Update in SSM console — do not commit real value."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Service: neo4j
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OUTPUTS
+# Export the parameter paths (not values!) so other stacks know where to look.
+# Application code reads the actual values at runtime via SSM SDK or Spring integration.
+# ─────────────────────────────────────────────────────────────────────────────
+Outputs:
+
+  ParameterStoreBasePath:
+    Description: Base path for all ShopFlow parameters in this environment
+    Value: !Sub "/${ProjectName}/${Environment}"
+    Export:
+      Name: !Sub "${ProjectName}-ssm-base-path"
+
+  DatabaseUrlPath:
+    Description: SSM path for the database JDBC URL
+    Value: !Sub "/${ProjectName}/${Environment}/database/url"
+    Export:
+      Name: !Sub "${ProjectName}-ssm-db-url-path"
+
+  DatabasePasswordPath:
+    Description: SSM path for the database password (SecureString)
+    Value: !Sub "/${ProjectName}/${Environment}/database/password"
+    Export:
+      Name: !Sub "${ProjectName}-ssm-db-password-path"
+
+  JwtSecretPath:
+    Description: SSM path for the JWT signing secret
+    Value: !Sub "/${ProjectName}/${Environment}/jwt/secret"
+    Export:
+      Name: !Sub "${ProjectName}-ssm-jwt-secret-path"
+
+  RedisHostPath:
+    Description: SSM path for the Redis hostname
+    Value: !Sub "/${ProjectName}/${Environment}/redis/host"
+    Export:
+      Name: !Sub "${ProjectName}-ssm-redis-host-path"
+
+  KafkaBrokersPath:
+    Description: SSM path for Kafka bootstrap servers
+    Value: !Sub "/${ProjectName}/${Environment}/kafka/brokers"
+    Export:
+      Name: !Sub "${ProjectName}-ssm-kafka-brokers-path"

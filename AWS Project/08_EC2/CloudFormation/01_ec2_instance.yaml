@@ -1,0 +1,262 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ShopFlow EC2 — Module 8: Virtual Machine (Spring Boot Host)
+  Creates a single EC2 instance in a private subnet running Amazon Linux 2023.
+  The instance pulls the ShopVerse JAR from S3 and starts the Spring Boot app.
+  Access via SSM Session Manager — no SSH key pair, no bastion host needed.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: shopflow
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, production]
+
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    Description: >
+      EC2 instance type. t3.micro is free tier eligible in ap-south-1.
+      1 GB RAM — tight for Spring Boot but workable for learning.
+      Set JVM heap to -Xms256m -Xmx512m to leave headroom for the OS.
+    AllowedValues:
+      - t3.micro    # 1 GB RAM — free tier eligible in ap-south-1
+      - t3.small    # 2 GB RAM — free tier eligible in ap-south-1
+      - t4g.micro   # 1 GB RAM — free tier eligible (ARM — different AMI needed)
+
+  EC2InstanceProfileArn:
+    Type: String
+    Description: >
+      ARN of the EC2 instance profile (shopflow-ec2-role).
+      Run: aws iam get-instance-profile --instance-profile-name shopflow-ec2-role
+           --query "InstanceProfile.Arn" --output text
+      If no instance profile exists, run:
+           aws iam create-instance-profile --instance-profile-name shopflow-ec2-role
+           aws iam add-role-to-instance-profile --instance-profile-name shopflow-ec2-role --role-name shopflow-ec2-role
+
+  EC2SecurityGroupId:
+    Type: String
+    Description: >
+      Security Group ID for the EC2 instance (shopflow-ec2-sg).
+      Find it: EC2 Console → Security Groups → filter by shopflow-ec2
+      or run: aws ec2 describe-security-groups --filters "Name=group-name,Values=*ec2*shopflow*"
+              --query "SecurityGroups[0].GroupId" --output text --region ap-south-1
+
+  PublicSubnetId:
+    Type: String
+    Description: >
+      Public subnet ID to launch the instance in (shopflow-pub-subnet-1a).
+      We use a PUBLIC subnet so the SSM Agent can reach AWS endpoints without a NAT Gateway.
+      Find it: VPC Console → Subnets → filter by shopflow-public
+      or run: aws ec2 describe-subnets --filters "Name=tag:Name,Values=*shopflow*public*1a*"
+              --query "Subnets[0].SubnetId" --output text --region ap-south-1
+
+  LatestAL2023AMI:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64
+
+# ─────────────────────────────────────────────────────────────
+# CONCEPT: Amazon EC2
+#
+# EC2 (Elastic Compute Cloud) is a virtual machine in the cloud.
+# You choose the OS, CPU, and RAM. AWS provides the hardware.
+#
+# KEY CONCEPTS IN THIS TEMPLATE:
+#
+#  1. AMI (Amazon Machine Image):
+#     The OS template the instance starts from. We use Amazon Linux 2023
+#     (AL2023) — AWS's own Linux distro, free, with AWS CLI + SSM Agent
+#     pre-installed. The AMI ID changes per region, so we use an SSM
+#     parameter to get the latest AL2023 AMI automatically.
+#     Path: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64
+#
+#  2. User Data:
+#     A shell script that runs ONCE on first boot. We use it to:
+#     - Install Java 21 (Corretto — Amazon's JDK)
+#     - Download the ShopVerse JAR from S3
+#     - Configure environment variables from SSM + Secrets Manager
+#     - Start the Spring Boot app as a systemd service
+#
+#  3. Instance Profile (IAM Role):
+#     The EC2 instance needs permissions to:
+#     - Read the JAR from S3 (s3:GetObject)
+#     - Read SSM parameters (ssm:GetParameter)
+#     - Read Secrets Manager values (secretsmanager:GetSecretValue)
+#     - Write logs to CloudWatch (logs:PutLogEvents)
+#     - Connect via SSM Session Manager (no SSH needed)
+#     All these permissions are in the shopflow-ec2-role (Module 1 — IAM).
+#
+#  4. SSM Session Manager:
+#     Instead of opening SSH port 22 and managing key pairs, we use
+#     AWS SSM Session Manager. You open a terminal to the instance
+#     through the AWS Console or CLI — no inbound ports needed.
+#     This is more secure than SSH because:
+#     - No port 22 open on the security group
+#     - All sessions logged in CloudTrail
+#     - IAM controls who can connect
+#
+#  5. Private Subnet:
+#     The EC2 instance is in the private subnet — not directly accessible
+#     from the internet. Traffic flows:
+#     Internet → ALB (public subnet) → EC2 port 8080 (private subnet)
+#
+#  6. Launch Template vs. direct instance:
+#     A Launch Template stores the instance configuration. You can
+#     launch many identical instances from one template, or use it
+#     with Auto Scaling Groups later. We use it here for good habits
+#     even with a single instance.
+# ─────────────────────────────────────────────────────────────
+
+Resources:
+
+  # ── Launch Template ──────────────────────────────────────────────────────────
+  # Defines the instance configuration. Other services (future ASG) can
+  # reference this template to launch identical instances.
+  ShopVerseInstanceTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub "${ProjectName}-shopverse-lt-${Environment}"
+      LaunchTemplateData:
+        ImageId: !Ref LatestAL2023AMI
+        InstanceType: !Ref InstanceType
+
+        # IAM Instance Profile: grants the EC2 instance its IAM permissions.
+        IamInstanceProfile:
+          Arn: !Ref EC2InstanceProfileArn
+
+        # NetworkInterfaces block: assigns public IP + security group + subnet together.
+        # NOTE: When using NetworkInterfaces, do NOT specify top-level SecurityGroupIds
+        # or the subnet at the instance level — both must go here instead.
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            AssociatePublicIpAddress: true
+            SubnetId: !Ref PublicSubnetId
+            Groups:
+              - !Ref EC2SecurityGroupId
+
+        # EBS root volume: 30 GB for OS + JVM + logs.
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeSize: 30
+              VolumeType: gp3
+              Encrypted: true
+              DeleteOnTermination: true
+
+        # Enable detailed monitoring (1-minute metrics instead of 5-minute).
+        # Free tier only supports basic (5-minute). Enable for production.
+        Monitoring:
+          Enabled: false
+
+        # ── USER DATA: instance startup script (Option B — learning mode) ────────
+        # Simplified script: installs Java and sets up a placeholder service.
+        # No JAR download, no DB/Redis connection — purely to learn EC2 mechanics.
+        # Connect via SSM Session Manager and explore the running instance.
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -e
+
+            # ── Step 1: System updates ───────────────────────────────────────
+            echo "=== ShopVerse EC2: System update ==="
+            yum update -y
+
+            # ── Step 2: Install Java 21 (Amazon Corretto) ─────────────────────
+            # Corretto is Amazon's free, production-ready OpenJDK distribution.
+            # Same version as local dev — confirms the runtime is ready.
+            echo "=== Installing Java 21 ==="
+            yum install -y java-21-amazon-corretto-headless
+            java -version
+
+            # ── Step 3: Install CloudWatch Agent ──────────────────────────────
+            # Ships logs from this instance to CloudWatch Log Groups.
+            yum install -y amazon-cloudwatch-agent
+            echo "=== CloudWatch Agent installed ==="
+
+            # ── Step 4: Create app directory and system user ──────────────────
+            # Non-login system user: app runs as shopverse, not root.
+            # Security best practice — limits blast radius if app is compromised.
+            mkdir -p /opt/shopverse
+            useradd -r -s /bin/false shopverse
+
+            # ── Step 5: Write placeholder systemd service ─────────────────────
+            # A real service file — just runs 'sleep infinity' instead of a JAR.
+            # This lets you: systemctl status shopverse / start / stop / restart.
+            # Replace ExecStart with the real java command when JAR is ready.
+            cat > /etc/systemd/system/shopverse.service << 'EOF'
+            [Unit]
+            Description=ShopVerse Spring Boot Application (placeholder)
+            After=network.target
+
+            [Service]
+            Type=simple
+            User=shopverse
+            ExecStart=/bin/sleep infinity
+            Restart=always
+            RestartSec=10
+            StandardOutput=journal
+            StandardError=journal
+            SyslogIdentifier=shopverse
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+
+            # ── Step 6: Enable and start the placeholder service ──────────────
+            systemctl daemon-reload
+            systemctl enable shopverse
+            systemctl start shopverse
+
+            echo "=== EC2 setup complete ==="
+            echo "=== Connect via: EC2 Console → Instance → Connect → Session Manager ==="
+            echo "=== Check service: systemctl status shopverse ==="
+            echo "=== Java version: java -version ==="
+
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub "${ProjectName}-shopverse-${Environment}"
+              - Key: Project
+                Value: !Ref ProjectName
+              - Key: Environment
+                Value: !Ref Environment
+
+  # ── EC2 Instance ──────────────────────────────────────────────────────────────
+  # Launch one instance from the template in public subnet 1a.
+  # Subnet is defined in the Launch Template's NetworkInterfaces — not here.
+  ShopVerseInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref ShopVerseInstanceTemplate
+        Version: !GetAtt ShopVerseInstanceTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-shopverse-${Environment}"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  InstanceId:
+    Description: EC2 Instance ID
+    Value: !Ref ShopVerseInstance
+    Export:
+      Name: !Sub "${ProjectName}-ec2-instance-id"
+
+  PrivateIP:
+    Description: Private IP address of the EC2 instance
+    Value: !GetAtt ShopVerseInstance.PrivateIp
+    Export:
+      Name: !Sub "${ProjectName}-ec2-private-ip"
+
+  LaunchTemplateId:
+    Description: Launch Template ID (use for ALB Target Group registration)
+    Value: !Ref ShopVerseInstanceTemplate
+    Export:
+      Name: !Sub "${ProjectName}-launch-template-id"

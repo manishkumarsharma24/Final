@@ -1,0 +1,151 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ShopFlow SNS — Module 13: Notification Topics
+  Creates SNS topics for alerting and fan-out messaging.
+  CloudWatch alarms (Module 16) publish to these topics.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: shopflow
+
+  Environment:
+    Type: String
+    Default: dev
+
+  OpsEmailAddress:
+    Type: String
+    Default: manishkumarsharma24@gmail.com
+    Description: Email address for ops alerts (you will receive a confirmation email)
+
+# ─────────────────────────────────────────────────────────────
+# CONCEPT: Amazon SNS (Simple Notification Service)
+#
+# SNS broadcasts one message to many subscribers simultaneously.
+# This is "fan-out": one publish → delivered to N destinations.
+#
+# COMPONENTS:
+#   - Topic: the channel you publish to
+#   - Subscription: a subscriber (email, SQS, Lambda, HTTP endpoint)
+#   - Message: the payload published to the topic
+#
+# SHOPVERSE USE CASES:
+#   1. Ops Alerts: CloudWatch alarm fires → SNS topic →
+#      email to ops team + Lambda to page on-call
+#   2. Order Fan-out: Order placed event → SNS topic →
+#      notification SQS (email Lambda) + analytics SQS + inventory SQS
+#
+# SNS vs SQS:
+#   - SNS: publish once, deliver to many. No retry/persistence.
+#   - SQS: queue for one consumer. Messages persist until consumed.
+#   - Pattern "SNS → SQS": fanout + durability. One event →
+#     multiple SQS queues (each consumed independently).
+# ─────────────────────────────────────────────────────────────
+
+Resources:
+
+  # ── Ops Alert Topic ──────────────────────────────────────────────────────────
+  # CloudWatch alarms (Module 16) publish here when thresholds are breached.
+  # Subscribed: ops team email (this template) + future Lambda for PagerDuty.
+  OpsAlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ProjectName}-ops-alerts-${Environment}"
+      DisplayName: "ShopFlow Ops Alerts"
+      # Encryption: encrypt messages in transit and at rest
+      KmsMasterKeyId: alias/aws/sns
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Email subscription: when an alarm fires, you get an email.
+  # NOTE: AWS sends a confirmation email first. You MUST click
+  # "Confirm subscription" in that email before alerts are delivered.
+  OpsEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref OpsAlertTopic
+      Protocol: email
+      Endpoint: !Ref OpsEmailAddress
+
+  # ── Order Events Fan-out Topic ────────────────────────────────────────────────
+  # ShopVerse publishes order events here. Multiple SQS queues subscribe,
+  # so the same event is processed independently by different consumers:
+  # - Notification queue: send confirmation email
+  # - Order events queue: update order status, trigger fulfillment
+  OrderFanoutTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ProjectName}-order-fanout-${Environment}"
+      DisplayName: "ShopFlow Order Events Fan-out"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── SNS → SQS Subscriptions ──────────────────────────────────────────────────
+  # When an order event is published to OrderFanoutTopic, SNS delivers a copy
+  # to EACH of these queues simultaneously (fan-out).
+  #
+  # NOTE: Queue policies allowing SNS to send are already set in the SQS stack
+  # (Module 12). We only need the subscriptions here.
+  #
+  # RawMessageDelivery: true → SQS consumer receives the original JSON directly.
+  # RawMessageDelivery: false (default) → SNS wraps it in an envelope like:
+  #   { "Type":"Notification", "MessageId":"...", "Message": "<your JSON>" }
+  # For Spring Boot consumers, raw delivery is simpler to parse.
+
+  # Subscribe the notification SQS queue → sends order confirmation emails/SMS
+  NotificationQueueSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref OrderFanoutTopic
+      Protocol: sqs
+      Endpoint: !ImportValue shopflow-notification-queue-arn
+      RawMessageDelivery: true
+
+  # Subscribe the order events SQS queue → updates order status, triggers fulfillment
+  OrderQueueSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref OrderFanoutTopic
+      Protocol: sqs
+      Endpoint: !ImportValue shopflow-order-event-queue-arn
+      RawMessageDelivery: true
+
+  # Subscribe the inventory update SQS queue → decrements stock for ordered items
+  InventoryQueueSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref OrderFanoutTopic
+      Protocol: sqs
+      Endpoint: !ImportValue shopflow-inventory-queue-arn
+      RawMessageDelivery: true
+
+Outputs:
+  OpsAlertTopicArn:
+    Description: ARN of the ops alerts topic (used by CloudWatch alarms in Module 16)
+    Value: !Ref OpsAlertTopic
+    Export:
+      Name: !Sub "${ProjectName}-ops-alert-topic-arn"
+
+  OpsAlertTopicName:
+    Description: Name of the ops alerts topic
+    Value: !GetAtt OpsAlertTopic.TopicName
+    Export:
+      Name: !Sub "${ProjectName}-ops-alert-topic-name"
+
+  OrderFanoutTopicArn:
+    Description: ARN of the order fan-out topic (Spring Boot publishes order events here)
+    Value: !Ref OrderFanoutTopic
+    Export:
+      Name: !Sub "${ProjectName}-order-fanout-topic-arn"
+
+  OrderFanoutTopicName:
+    Description: Name of the order fan-out topic
+    Value: !GetAtt OrderFanoutTopic.TopicName
+    Export:
+      Name: !Sub "${ProjectName}-order-fanout-topic-name"

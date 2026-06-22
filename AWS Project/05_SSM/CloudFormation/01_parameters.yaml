@@ -1,0 +1,345 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ShopFlow SSM Parameter Store — Module 5: Application Configuration
+  Stores non-sensitive config values that ECS tasks, EC2, and Lambda
+  read at startup. Deploy AFTER Secrets Manager (Module 4) and
+  AFTER RDS/ElastiCache are deployed so real endpoints can be filled in.
+
+  NOTE: Most parameters below have placeholder values (FILL_AFTER_DEPLOY).
+  You will update them with real values after the infrastructure stacks
+  (RDS, ElastiCache, etc.) are created in later modules.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: shopflow
+    Description: Project name prefix for all parameter paths
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, production]
+
+# ─────────────────────────────────────────────────────────────
+# CONCEPT: SSM Parameter Store
+#
+# AWS Systems Manager Parameter Store stores configuration strings
+# that your application reads at runtime. Think of it as a
+# centralized, versioned config file in the cloud.
+#
+# WHY USE IT instead of hardcoding values in your Docker image or
+# CloudFormation template?
+#   - Change a config value without rebuilding and redeploying the app
+#   - Use the same Docker image across dev/staging/production — only
+#     the parameter values differ
+#   - Audit log: SSM records every change to every parameter
+#
+# PARAMETER TYPES:
+#   - String: plain text (hostname, port, feature flag)
+#   - StringList: comma-separated values (e.g., list of Kafka brokers)
+#   - SecureString: encrypted (same KMS encryption as Secrets Manager,
+#     but no auto-rotation support — use Secrets Manager for passwords)
+#
+# PARAMETER PATHS:
+#   SSM uses a hierarchical path like a filesystem:
+#   /<project>/<environment>/<service>/<key>
+#   Example: /shopflow/dev/db/endpoint
+#
+#   This lets you grant a service access to ALL parameters under
+#   /shopflow/dev/ without listing each one individually.
+#
+# COST:
+#   - Standard parameters (≤4KB): FREE
+#   - Advanced parameters (>4KB or with policies): $0.05/parameter/month
+#   All parameters here are Standard (free).
+#
+# HOW ECS READS PARAMETERS:
+#   In the ECS task definition, you reference SSM parameters under
+#   the "environment" section using "valueFrom":
+#     {"name": "REDIS_HOST", "valueFrom": "/shopflow/dev/redis/endpoint"}
+#   ECS fetches the value at task startup via the execution role.
+# ─────────────────────────────────────────────────────────────
+
+Resources:
+
+  # ═══════════════════════════════════════════════════════════
+  # GROUP 1: DATABASE CONFIGURATION
+  # ═══════════════════════════════════════════════════════════
+  # These will be populated with real RDS endpoint values after
+  # the RDS stack (Module 6) is deployed.
+
+  # The RDS MySQL endpoint (hostname) — not a secret, just a hostname.
+  # Format: <db-identifier>.xxxxxxxxxx.ap-south-1.rds.amazonaws.com
+  DBEndpoint:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/db/endpoint"
+      Type: String
+      Value: "FILL_AFTER_RDS_DEPLOY"
+      Description: "RDS MySQL writer endpoint. Update after Module 6 (RDS) is deployed."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Module: RDS
+
+  DBPort:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/db/port"
+      Type: String
+      Value: "3306"
+      Description: "MySQL port. Default 3306."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  DBName:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/db/name"
+      Type: String
+      Value: "shopverse"
+      Description: "MySQL database name — matches ShopVerse Flyway migration schema."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  # ═══════════════════════════════════════════════════════════
+  # GROUP 2: REDIS / ELASTICACHE CONFIGURATION
+  # ═══════════════════════════════════════════════════════════
+  # ShopVerse uses Redis for 8 things (JWT sessions, cache, rate limiter,
+  # cart, locks, pub/sub, leaderboards, recently-viewed).
+  # The endpoint is non-sensitive — only the AUTH password is a secret.
+
+  RedisEndpoint:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/redis/endpoint"
+      Type: String
+      Value: "FILL_AFTER_ELASTICACHE_DEPLOY"
+      Description: "ElastiCache Redis primary endpoint. Update after Module 7 (ElastiCache) is deployed."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Module: ElastiCache
+
+  RedisPort:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/redis/port"
+      Type: String
+      Value: "6379"
+      Description: "Redis port. Default 6379."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  # Cache TTL values match CacheConfig.java in shopverse-web.
+  # Storing them here allows tuning without redeployment.
+  RedisTTLProducts:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/redis/ttl/products"
+      Type: String
+      Value: "1800"   # 30 minutes in seconds — matches CacheConfig.java
+      Description: "Products cache TTL in seconds. Matches @Cacheable(value='products') in CachedProductService."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  RedisTTLCustomers:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/redis/ttl/customers"
+      Type: String
+      Value: "3600"   # 60 minutes in seconds
+      Description: "Customers cache TTL in seconds."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  RedisTTLOrders:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/redis/ttl/orders"
+      Type: String
+      Value: "300"    # 5 minutes in seconds — orders change frequently
+      Description: "Orders cache TTL in seconds."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  # ═══════════════════════════════════════════════════════════
+  # GROUP 3: APPLICATION CONFIGURATION
+  # ═══════════════════════════════════════════════════════════
+
+  AppPort:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/app/port"
+      Type: String
+      Value: "8080"
+      Description: "Spring Boot server port."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  AppEnvironment:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/app/environment"
+      Type: String
+      Value: !Ref Environment
+      Description: "Active Spring profile (dev / staging / production). Maps to spring.profiles.active."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  AppLogLevel:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/app/log-level"
+      Type: String
+      Value: "INFO"
+      Description: "Root logging level for Spring Boot. Change to DEBUG for troubleshooting without redeploy."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  # JWT expiry — how long a login token is valid before the user
+  # must re-authenticate. 86400 = 24 hours.
+  JWTExpirySeconds:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/app/jwt-expiry-seconds"
+      Type: String
+      Value: "86400"
+      Description: "JWT token validity in seconds. 86400 = 24 hours. Stored here so it can be shortened quickly if tokens are compromised."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  # ═══════════════════════════════════════════════════════════
+  # GROUP 4: S3 CONFIGURATION
+  # ═══════════════════════════════════════════════════════════
+
+  S3ArtifactsBucket:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/s3/artifacts-bucket"
+      Type: String
+      Value: !Sub "${ProjectName}-artifacts-${Environment}"
+      Description: "S3 bucket name for application JARs. Imported from Module 3 (S3)."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  S3ImagesBucket:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/s3/images-bucket"
+      Type: String
+      Value: !Sub "${ProjectName}-product-images-${Environment}"
+      Description: "S3 bucket name for product images. Imported from Module 3 (S3)."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  # ═══════════════════════════════════════════════════════════
+  # GROUP 5: FEATURE FLAGS
+  # ═══════════════════════════════════════════════════════════
+  # Feature flags let you turn features on/off without redeploying.
+  # The Spring Boot app reads these via AWS SDK at startup (or per-request
+  # for latency-sensitive flags).
+
+  FeatureFlagGraphQL:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/feature/graphql-enabled"
+      Type: String
+      Value: "true"
+      Description: "Enable GraphQL endpoint (ProductGraphQLController). Set to false to disable without redeploying."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  FeatureFlagReactiveEndpoints:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/feature/reactive-enabled"
+      Type: String
+      Value: "true"
+      Description: "Enable reactive product endpoints (ReactiveProductController)."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  FeatureFlagMaintenanceMode:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/feature/maintenance-mode"
+      Type: String
+      Value: "false"
+      Description: "When true, API returns 503 for all write operations. Use during DB migrations."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  # ═══════════════════════════════════════════════════════════
+  # GROUP 6: RATE LIMITING CONFIGURATION
+  # ═══════════════════════════════════════════════════════════
+  # ShopVerse uses a Lua script in Redis for rate limiting.
+  # These parameters configure the limits per endpoint.
+
+  RateLimitAuthPerMinute:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/rate-limit/auth-per-minute"
+      Type: String
+      Value: "10"
+      Description: "Max login attempts per IP per minute. Backed by Redis INCR + EXPIRE Lua script."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  RateLimitAPIPerMinute:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/rate-limit/api-per-minute"
+      Type: String
+      Value: "200"
+      Description: "Max API requests per authenticated user per minute."
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+# ─────────────────────────────────────────────────────────────
+# OUTPUTS
+# Export key parameter names so other stacks can reference them
+# without hardcoding the path strings.
+# ─────────────────────────────────────────────────────────────
+Outputs:
+
+  DBEndpointParamName:
+    Description: SSM parameter name for RDS endpoint
+    Value: !Ref DBEndpoint
+    Export:
+      Name: !Sub "${ProjectName}-ssm-db-endpoint"
+
+  RedisEndpointParamName:
+    Description: SSM parameter name for Redis endpoint
+    Value: !Ref RedisEndpoint
+    Export:
+      Name: !Sub "${ProjectName}-ssm-redis-endpoint"
+
+  AppEnvironmentParamName:
+    Description: SSM parameter name for active Spring profile
+    Value: !Ref AppEnvironment
+    Export:
+      Name: !Sub "${ProjectName}-ssm-app-environment"
+
+  ParameterPathPrefix:
+    Description: Root path prefix for all ShopFlow parameters in this environment
+    Value: !Sub "/${ProjectName}/${Environment}/"
+    Export:
+      Name: !Sub "${ProjectName}-ssm-path-prefix"

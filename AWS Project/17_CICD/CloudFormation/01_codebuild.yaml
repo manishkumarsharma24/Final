@@ -1,0 +1,176 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ShopFlow CI/CD — Module 17: CodeBuild
+  Creates CodeBuild project to: compile ShopVerse, run tests,
+  build the Docker image, and push it to ECR.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: shopflow
+
+  Environment:
+    Type: String
+    Default: dev
+
+  GitHubOwner:
+    Type: String
+    Description: GitHub username or organisation (e.g., manishkumar)
+
+  GitHubRepo:
+    Type: String
+    Default: ShopVerse
+    Description: GitHub repository name
+
+  CICDRoleArn:
+    Type: String
+    Description: >
+      ARN of the CI/CD IAM role (shopflow-cicd-role).
+      Run: aws iam get-role --role-name shopflow-cicd-role --query "Role.Arn" --output text
+
+  ECRRepoUri:
+    Type: String
+    Description: >
+      URI of the ECR repository (without tag).
+      Run: aws ecr describe-repositories --repository-names shopflow/shopverse-web
+           --query "repositories[0].repositoryUri" --output text --region ap-south-1
+      Format: <account>.dkr.ecr.ap-south-1.amazonaws.com/shopflow/shopverse-web
+
+  CICDArtifactsBucket:
+    Type: String
+    Description: >
+      Name of the S3 bucket for CI/CD artifacts (shopflow-cicd-artifacts-dev or similar).
+      Run: aws s3 ls | grep shopflow-cicd
+      or check S3 console.
+
+# ─────────────────────────────────────────────────────────────
+# CONCEPT: AWS CodeBuild
+#
+# CodeBuild is a managed build server. It checks out your code,
+# runs your build commands (Maven, Docker, etc.), and produces
+# artifacts. Think of it as a hosted Jenkins build agent.
+#
+# HOW IT WORKS:
+#   1. CodeBuild starts a fresh container (build environment)
+#   2. Clones your source code (GitHub, CodeCommit, S3)
+#   3. Runs the commands in buildspec.yml (defined inline below)
+#   4. Produces artifacts (imagedefinitions.json for ECS deploy)
+#   5. Container is destroyed — next build starts fresh
+#
+# BUILDSPEC PHASES:
+#   - install:    install tools / set runtimes
+#   - pre_build:  authenticate to ECR
+#   - build:      mvn package + docker build
+#   - post_build: docker push + write imagedefinitions.json
+#
+# FREE TIER: 100 build minutes/month on BUILD_GENERAL1_SMALL — forever.
+# ─────────────────────────────────────────────────────────────
+
+Resources:
+
+  # Log group for CodeBuild output — 30-day retention
+  CodeBuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/codebuild/${ProjectName}-build-${Environment}"
+      RetentionInDays: 30
+
+  # ── Main Build Project ───────────────────────────────────────────────────────
+  # Runs: mvn clean package → docker build → docker push to ECR
+  ShopVerseBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${ProjectName}-build-${Environment}"
+      Description: "Builds ShopVerse: Maven compile + Docker build + ECR push"
+      ServiceRole: !Ref CICDRoleArn
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: aws/codebuild/standard:7.0   # Amazon Linux 2023 + Java 21 + Docker
+        ComputeType: BUILD_GENERAL1_SMALL   # Free tier — 3GB RAM, 2 vCPU
+        PrivilegedMode: true                # Required to run Docker commands inside build
+        EnvironmentVariables:
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+          - Name: ECR_REPO_URI
+            Value: !Ref ECRRepoUri
+          - Name: ENVIRONMENT
+            Value: !Ref Environment
+      Source:
+        Type: GITHUB
+        Location: !Sub "https://github.com/${GitHubOwner}/${GitHubRepo}.git"
+        BuildSpec: |
+          version: 0.2
+
+          phases:
+            install:
+              runtime-versions:
+                java: corretto21
+              commands:
+                - echo "=== Build started on $(date) ==="
+
+            pre_build:
+              commands:
+                - echo "=== Authenticating to ECR ==="
+                - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+                - IMAGE_TAG=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-8)
+                - echo "Image tag will be $IMAGE_TAG"
+
+            build:
+              commands:
+                - echo "=== Maven build ==="
+                - ./mvnw clean package -DskipTests -pl shopverse-web -am
+                - echo "=== Docker build ==="
+                - docker build -t $ECR_REPO_URI:$IMAGE_TAG -t $ECR_REPO_URI:latest .
+
+            post_build:
+              commands:
+                - echo "=== Pushing to ECR ==="
+                - docker push $ECR_REPO_URI:$IMAGE_TAG
+                - docker push $ECR_REPO_URI:latest
+                - echo "=== Writing image definition for ECS ==="
+                - printf '[{"name":"shopverse","imageUri":"%s"}]' $ECR_REPO_URI:$IMAGE_TAG > imagedefinitions.json
+                - echo "Build complete. Image $ECR_REPO_URI:$IMAGE_TAG"
+
+          artifacts:
+            files:
+              - imagedefinitions.json   # Passed to CodePipeline for ECS deploy
+
+          cache:
+            paths:
+              - '/root/.m2/**/*'        # Cache Maven dependencies between builds (~saves 2-3 min per build)
+
+      Artifacts:
+        Type: S3
+        Location: !Ref CICDArtifactsBucket
+        Name: !Sub "${ProjectName}-build-output"
+        Packaging: ZIP
+
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref CodeBuildLogGroup
+
+      Cache:
+        Type: S3
+        Location: !Sub "${CICDArtifactsBucket}/cache"
+
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  BuildProjectName:
+    Description: CodeBuild project name (needed as parameter in CodePipeline stack)
+    Value: !Ref ShopVerseBuildProject
+    Export:
+      Name: !Sub "${ProjectName}-codebuild-project"
+
+  BuildProjectArn:
+    Description: CodeBuild project ARN
+    Value: !GetAtt ShopVerseBuildProject.Arn
+    Export:
+      Name: !Sub "${ProjectName}-codebuild-project-arn"
