@@ -1,0 +1,101 @@
+Q: Explain the Microservices Architecture and contrast it with a Monolithic Architecture. What are the primary trade-offs?
+
+Answer: A Monolithic Architecture combines all software components (UI, business logic, data access) into a single, unified codebase and deployable unit. 
+
+A Microservices Architecture structures an application as a collection of small, autonomous, loosely coupled services organized around specific business capabilities.
+
+Trade-offs:
+
+Monolith 
+
+Pros: Simple to develop, test, and deploy initially; low latency due to in-memory calls.Monolith 
+
+Cons: Poor scalability (must scale the entire app); tight code coupling; single point of failure; slow deployment pipelines as the team grows.
+
+Microservices 
+
+Pros: Independent deployment; technology stack flexibility; horizontal scaling per service; fault isolation (one service crashing doesn't down the whole app).Microservices 
+
+Cons: Increased operational complexity; difficult distributed data management; network latency; harder to debug end-to-end.
+
+Q: What is the Database-per-Service pattern? Why is it recommended, and what challenges does it introduce?
+
+Answer: This pattern dictates that each microservice must own its own private database. Other services cannot access this database directly; they must interact via the owning service's public APIs.Why it's recommended: It ensures tight decoupling. If two services share a database schema, a change by Team A can instantly break Team B's service. Database-per-service preserves independent deployability and lets teams choose the best database for their specific data type (e.g., NoSQL for catalogs, Relational for payments).
+
+Challenges:Implementing business transactions that span multiple services (requires patterns like Saga).Querying and joining data across multiple databases (requires API Composition or CQRS).
+
+Q: How do you decompose a monolith into microservices? What is the Strangler Fig pattern?Answer: Decomposing a monolith should be done iteratively based on business capabilities or subdomains.
+
+The Strangler Fig Pattern is the preferred strategy. Instead of a high-risk "big bang" rewrite, you place an API Gateway or routing layer in front of the monolith. You then extract a single capability into a new microservice. The gateway redirects traffic for that specific capability to the new microservice while routing everything else to the old monolith. Over time, you extract more services until the old monolith is completely replaced ("strangled") and can be deprecated.
+
+Q: Explain the API Gateway pattern. What are its core responsibilities?
+
+Answer: An API Gateway is a single entry point for all external client requests. It sits between client applications (web, mobile) and the internal microservices.Core Responsibilities:Routing: Forwarding requests to the correct internal microservice.Protocol Translation: Converting client-friendly protocols (like REST/HTTP or WebSockets) to internal protocols (like gRPC or AMQP).Cross-Cutting Concerns: Handling authentication, authorization, SSL termination, rate limiting, and request logging in one centralized place instead of duplicating it in every service.
+
+2. Service Communication & Routing
+
+Q: Contrast Synchronous vs. Asynchronous communication. When do you use each?
+
+Answer:Synchronous (e.g., HTTP/REST, gRPC): The client sends a request and blocks its execution thread, waiting for an immediate response from the receiver. Use this when the user needs an instant answer (e.g., checking product availability before adding it to a cart).
+
+Asynchronous (e.g., Kafka, RabbitMQ): The sender publishes a message or event to a broker and immediately continues its work without waiting for a response. Downstream services consume the message whenever they are ready. Use this for long-running, non-blocking processes (e.g., generating an invoice pdf, sending a confirmation email).
+
+Q: How does gRPC work, and why is it faster than traditional REST over JSON?
+
+Answer: gRPC is a high-performance, open-source Remote Procedure Call framework developed by Google.Why it's faster:Protobuf: Instead of text-based, heavy JSON payloads, gRPC uses Protocol Buffers, a highly optimized binary serialization format. This results in much smaller network payloads.HTTP/2: While REST typically relies on HTTP/1.1 (one request per TCP connection at a time), gRPC uses HTTP/2. This supports multiplexing (sending multiple requests/responses over a single connection simultaneously), header compression, and bidirectional streaming.
+
+Q: Explain Service Discovery. What is the difference between Client-Side and Server-Side discovery?
+
+Answer: Because microservice instances scale up/down dynamically, their IP addresses change constantly. Service Discovery dynamically tracks these network locations using a Service Registry (like Consul or Eureka).
+
+Client-Side Discovery: The client service queries the Service Registry directly to get a list of healthy instances, chooses one using its own load-balancing algorithm, and calls it.
+
+Server-Side Discovery: The client calls an intermediary load balancer (like an AWS ALB). The load balancer queries the Service Registry behind the scenes and forwards the traffic to a healthy instance.
+
+3. Distributed Data Management & Consistency
+
+Q: Explain the Saga Pattern. Detail the difference between Orchestration and Choreography.
+
+Answer: Since distributed microservices cannot easily use traditional ACID transactions across isolated databases, the Saga Pattern manages data consistency. A Saga is a sequence of local transactions. Each transaction updates data within a single service and triggers the next step. If a step fails, the Saga runs compensating transactions to undo the previous changes.Choreography: There is no central controller. Services listen to events and execute their local transactions independently. (e.g., Service A emits OrderCreated. Service B hears it, charges the card, and emits PaymentSuccess). Best for simple workflows with few services.Orchestration: A dedicated central service (the Orchestrator) acts as the project manager. It tells each participant exactly what transaction to execute next based on the workflow state machine. Best for complex workflows involving many steps.
+
+Q: Explain CQRS (Command Query Responsibility Segregation).
+
+Answer: CQRS separates read operations from write operations into completely distinct data models and paths.
+
+Command Side: Handles all create/update/delete operations. Optimized strictly for fast writes and business validation logic.
+
+Query Side: Handles all read operations. Optimized for complex, rapid UI data rendering. It often uses a read-optimized NoSQL database or a denormalized view.
+
+Synchronization: When a command modifies data, it publishes a domain event. A background consumer catches this event and immediately updates the read database asynchronously, resulting in eventual consistency.
+
+Q: What is Event Sourcing?
+
+Answer: Instead of storing just the current state of an object in a database table (the traditional CRUD approach), Event Sourcing records the full sequence of atomic, immutable state-changing events in an append-only log called an Event Store.To find the current state of an entity, the system replays all historical events from the beginning.Snapshots: Replaying millions of events gets incredibly slow. To optimize performance, the system periodically takes a "Snapshot" of the state (e.g., every 100th event). To calculate current state, it loads the last snapshot and only replays the few events that occurred after it.
+
+4. Resiliency & Fault Tolerance
+
+Q: Explain the Circuit Breaker pattern and its three states.
+
+Answer: This pattern prevents a failing downstream service from causing a cascading failure that consumes threads and crashes upstream services. It wraps remote network calls in a protective state machine:Closed: Normal operation.
+
+ Requests flow directly to the downstream service. The circuit breaker monitors error rates.
+
+ Open: If the error rate crosses a set threshold (e.g., 50% failures), the circuit trips to Open. All incoming requests fail immediately without even attempting to call the broken downstream service. This gives the failing service breathing room to recover.
+
+ Half-Open: After a configured timeout period, the circuit moves to Half-Open. It allows a tiny trickling sample of real requests to pass through. If they succeed, it assumes the service is healthy and resets to Closed. If they fail, it immediately trips back to Open.
+
+ Q: What is the Bulkhead pattern?
+
+ Answer: Inspired by the physical compartments inside a ship's hull that prevent the whole ship from sinking if one section fills with water, the Bulkhead Pattern isolates application resources into independent pools.Software implementation: In an application, you assign a dedicated thread pool or connection pool to each downstream dependency. If Service A's thread pool becomes completely exhausted waiting for a slow Payment Service, Service A can still handle traffic for the Shipping Service because they utilize separate, isolated thread pools.
+
+ 5. Security, Observability & DevOps
+
+ Q: How do you handle distributed Authentication and Authorization?
+
+ Answer:The client sends credentials to an Identity Provider / OAuth2 Server and receives a JSON Web Token (JWT).The client attaches this JWT to the Authorization: Bearer <token> header on requests to the API Gateway.The API Gateway validates the cryptographic signature of the JWT at the edge.Once validated, the gateway forwards the request downstream to internal microservices, passing along user identity context (like User-ID and roles) via internal HTTP custom headers, ensuring the backend services remain stateless.
+
+ Q: Explain Distributed Tracing. How do Trace IDs and Span IDs propagate?
+
+ Answer: Distributed Tracing tracks an end-to-end request across a web of asynchronous microservices.When a request first hits the system edge (e.g., the API Gateway), the gateway generates a globally unique Trace ID for the overall request.Each distinct unit of work within a service is assigned a Span ID.When Service A makes a network call to Service B, it injects these IDs into the communication protocol headers (like W3C Trace Context or B3 headers). Service B reads the headers, keeps the same Trace ID, generates a new Span ID pointing to its parent, and continues the pattern. Central tracking tools (like Jaeger or Zipkin) collect this data to map out an end-to-end trace diagram for debugging bottlenecks.
+
+ Q: What are the Kubernetes Liveness and Readiness probes?Answer:Liveness Probe: Determines if a container needs to be restarted. If a service enters a deadlocked state where it is technically running but completely unresponsive, the liveness probe fails, and Kubernetes kills and restarts the container.Readiness Probe: Determines if a container is ready to accept live user traffic. If a service is still booting up or running a heavy database migration, the readiness probe fails. Kubernetes leaves the container alive but stops routing any network traffic to it until the probe passes.

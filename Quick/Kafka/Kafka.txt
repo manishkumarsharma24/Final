@@ -1,0 +1,143 @@
+1. Core Architecture & Core Concepts
+
+Q: What is Apache Kafka, and how does it differ from traditional message brokers like RabbitMQ?
+
+Answer: Kafka is a distributed, append-only, immutable event streaming platform designed for high-throughput, fault-tolerant processing of real-time data pipelines.
+
+Key Differences:
+
+Data Retention: 
+
+Traditional brokers (RabbitMQ) delete messages immediately after a consumer acknowledges them. Kafka retains messages on disk for a configured period (retention policy), allowing them to be replayed.
+
+Consumption Model: 
+
+RabbitMQ uses a push-based model (broker pushes to consumers). 
+
+Kafka uses a pull-based model (consumers pull at their own pace).
+
+Scale:
+
+RabbitMQ is built for complex routing and smart queuing.
+
+Kafka is built for massive, high-throughput log aggregation and parallel event streaming.
+
+Q: Explain Topics, Partitions, and Offsets in Kafka.
+
+Answer:
+
+Topic: A logical stream or category to which events are published (similar to a database table).
+
+Partition: Topics are split into smaller, ordered segments called partitions. Partitions are the fundamental unit of scalability and parallelism in Kafka. 
+
+They are distributed across different brokers in a cluster.
+
+Offset: Every message inside a partition is assigned a sequential, unique integer ID called an offset. Offsets are immutable; they map the exact position of a message within that specific partition.
+
+Q: What is a Consumer Group, and how does Kafka handle scale within it?
+
+Answer: A Consumer Group is a collection of consumers that cooperate to read messages from one or more topics. Kafka divides partition ownership among the members of the group to parallelize processing.
+
+Scaling Rule: Each partition inside a topic can be read by exactly one consumer within a specific consumer group at any given time.If you have a topic with 4 partitions and a consumer group with 2 consumers, each consumer reads from 2 partitions.If you add 2 more consumers (total 4), each consumer reads from exactly 1 partition.If you add a 5th consumer, it will sit completely idle because there are no available partitions left to assign to it.
+
+2. High Availability, Replication & Consistencies
+
+Q: How does Kafka achieve high availability and fault tolerance?Answer: Kafka replicates partition logs across multiple brokers in the cluster. When creating a topic, you specify a Replication Factor (e.g., a replication factor of 3 means there will be 3 copies of the data across 3 separate brokers).
+
+For each partition, one broker is designated as the Leader, and the remaining replicas are Followers. All production read and write operations go directly to the Leader. The Followers passively pull data from the Leader to stay synchronized. If the Leader broker crashes, the cluster automatically elects a healthy Follower to become the new Leader.
+
+Q: What does ISR (In-Sync Replicas) mean, and why is it critical?
+
+Answer: ISR is the subset of replica brokers that are actively keeping up with the partition Leader. A Follower is considered "In-Sync" if it has fetched the latest messages from the Leader within a configured time window (replica.lag.time.max.ms).
+
+If a follower broker experiences network lag or slows down, it is dropped from the ISR pool. If the Leader dies, Kafka will only elect a new leader from the healthy ISR pool to prevent data loss.
+
+Q: Explain the acks configuration options on the Producer side. What are the trade-offs?
+
+Answer: The acks configuration dictates how many replica brokers must acknowledge a write before the Producer considers it successful:
+
+acks=0: The producer doesn't wait for any acknowledgment at all. It sends the message and forgets it. Maximum performance, highest risk of data loss.
+
+acks=1: The producer waits for confirmation only from the partition Leader. Once the leader writes to its local log, it responds. Good balance of speed and safety, but data can be lost if the leader dies before followers replicate it.
+
+acks=all (or -1): The producer waits for the Leader and all current In-Sync Replicas (ISR) to log the message. Slowest performance, absolute highest data durability guarantees.
+
+3. Production Operations & Performance Tuning
+
+Q: Why is Kafka so fast despite saving everything directly to a slow hard disk?Answer: Kafka achieves its extreme high throughput using three primary engineering techniques:
+
+Sequential I/O: Kafka appends messages to the end of a log file sequentially. Operating systems optimize sequential disk access heavily, making it nearly as fast as RAM, unlike random disk access (which traditional databases use).
+
+Pagecache Exploitation: Kafka bypasses standard JVM memory overhead and heavily relies on the OS Kernel's Pagecache to store active data in RAM before flushing it to physical disk chunks.
+
+Zero-Copy Principle: Traditionally, transferring data from disk to network requires copying data across multiple user-space/kernel-space buffers. Kafka utilizes the OS sendfile system call, which pipes data directly from the disk/pagecache to the network socket, avoiding unnecessary CPU cycles and data duplication.
+
+Q: What triggers a Consumer Rebalance, and why should you avoid it in production?
+
+Answer: A Rebalance occurs when the group coordinator reassigns partition ownership among consumers inside a group.Triggers: A new consumer joins, an existing consumer leaves/crashes, or a topic's partition count changes.
+
+Why it's dangerous: During a rebalance, consumers stop processing incoming messages (a "Stop-the-World" phase). If your consumer takes too long processing a single message, it might fail to send a heartbeat to the broker (max.poll.interval.ms exceeded). The broker assumes the consumer is dead, kicks it out, and triggers a rebalance loop, creating major processing lag.
+
+Q: How do you handle Poison Pill messages (corrupted or unparseable payloads) in Kafka?
+
+Answer: If a consumer encounters a malformed payload that it cannot deserialize, catching the error and crashing the app creates an infinite loop because when it restarts, it will fetch the exact same offset again.
+
+The Fix: Dead Letter Queue (DLQ) pattern:Wrap the deserialization logic in a try-catch block.If a payload is unparseable, catch the exception, log the error details, and immediately publish that raw broken message into a separate topic called a dead-letter-topic.
+
+Commit the original offset so the consumer can move forward to the next healthy message. A separate team or manual process can safely audit the DLQ later.
+
+4. Advanced Concepts & Processing Guarantees
+
+Q: How do you achieve "Exactly-Once Semantics" (EOS) in Kafka?
+
+Answer: By default, distributed systems usually provide At-Least-Once processing (which causes data duplication if network retries occur). Kafka achieves Exactly-Once Semantics by combining two features:
+
+Idempotent Producers: The broker assigns a unique Producer ID and tracking sequence numbers to every batch of messages. If a network blip causes the producer to resend a batch, the broker recognizes the duplicate sequence ID and discards it seamlessly.
+
+Transactional API: When building read-process-write loops (e.g., using Kafka Streams), you can wrap your reads, local transformations, and subsequent writes inside an atomic transaction block. Either the entire flow (offsets committed + new events written) succeeds together, or the entire operation rolls back.
+
+Q: What is Log Compaction, and when is it useful?
+
+Answer: Traditional Kafka topics expire old data based on a strict time-to-live (e.g., delete everything older than 7 days). Log Compaction is an alternative retention policy where Kafka guarantees it will never delete the most recent value for any given message key within a partition.Use Case: This is incredibly useful for state management and restoring caches. For instance, if you have a user-profiles topic, you don't care about the history of a user's profile changes from 3 years ago; you only need their latest, current profile snapshot to populate an in-memory cache when a service reboots.
+
+5. Partition Selection Strategies (How Data is Routed)
+
+Q: How does Kafka determine which partition a message is sent to? What happens if the message key is null vs. provided?Answer: 
+
+On the Producer side, Kafka uses a component called a Partitioner to calculate the destination Partition ID.If a Key is Provided: By default, Kafka applies a hashing algorithm (MurmurHash2) to the key. It then calculates hash(key) % number_of_partitions to assign the message to a specific partition. This guarantees that all messages with the exact same key will always land in the same partition, preserving processing order.
+
+If the Key is Null: Modern Kafka (2.4+) uses the Sticky Partitioner strategy. It selects a partition and groups messages into a batch for that specific partition. Once the batch is full or linger.ms is reached, it switches to a different partition. This maximizes batching efficiency and reduces network overhead compared to old round-robin methods.
+
+Q: What is a Custom Partitioner, and when would you design one in production?
+
+Answer: A Custom Partitioner is a Java/Python class you write that overrides Kafka’s default hashing logic to control exactly which Partition ID a message gets.
+
+Production Use Case (Handling Skewed Data): Imagine an e-commerce platform where messages are keyed by tenant_id. If one massive enterprise client (Tenant X) generates 80% of your total orders, the default hashing strategy will dump all of Tenant X's traffic into a single partition. That partition’s broker will run out of disk space, and its consumer will lag severely.A custom partitioner can intercept messages for Tenant X and break them down by a secondary key (like order_id or a random suffix), spreading the heavy load evenly across multiple partitions, while leaving smaller tenants on standard key hashing.
+
+2. Critical Kafka Configurations & Tuning
+
+Q: What is the relationship between linger.ms and batch.size on the Producer? How do they impact throughput and latency?
+
+Answer: These two properties act as a balancing scale between network efficiency (throughput) and speed (latency):
+
+batch.size: Specifies the maximum amount of memory (in bytes) the producer will allocate to group messages for a single partition.
+
+linger.ms: Specifies the maximum amount of time the producer will wait for a batch to fill up before forcing it to send over the network.
+
+The Trade-off: If your application generates messages fast, the batch will hit its batch.size limit first and send immediately. If traffic slows down, the producer will pause and hold the messages in memory until linger.ms expires.
+
+To optimize for high throughput: Increase both values (e.g., batch.size=64KB, linger.ms=20ms) so Kafka can send fewer, larger packets.
+
+To optimize for ultra-low latency: Set linger.ms=0 so messages are sent instantly, though this increases CPU and network overhead.
+
+Q: Explain max.poll.interval.ms versus max.poll.records. How do they prevent consumer crashes?
+
+Answer: These two parameters govern the data consumption loop on the Consumer side and prevent false-positive failures:
+
+max.poll.records: Controls the maximum number of messages a consumer fetches in a single poll() call (default is 500).
+
+max.poll.interval.ms: The maximum amount of time allowed between consecutive calls to poll() before the broker assumes the consumer has thread-locked or died (default is 5 minutes).Tuning Scenario: If your consumer retrieves a batch of 500 heavy records, and each record takes 1 second to process in your code, the total processing time will be 500 seconds (over 8 minutes). This exceeds the default 5-minute max.poll.interval.ms, causing the broker to boot the consumer from the group and trigger a rebalance loop.To fix this, you must either lower max.poll.records (e.g., to 50) or increase max.poll.interval.ms to give your worker threads enough time to safely complete their tasks.
+
+Q: What are min.insync.replicas and acks=all, and how do they work together to prevent data loss?
+
+Answer: To guarantee absolute data durability (no message loss), these two properties must be configured together.Producer acks=all: Forces the producer to wait for the partition leader and all healthy in-sync replicas to confirm the write.Broker min.insync.replicas: Sets the minimum number of online, synchronized brokers required to accept an acks=all write. (For a replication factor of 3, this is typically set to 2).Why they need each other: If a topic has a replication factor of 3, but two replica brokers catch fire and go down, only the Leader remains alive. If min.insync.replicas is not set, a producer using acks=all will successfully write to the lone Leader and continue. If that final Leader crashes, your data is gone.With min.insync.replicas=2, Kafka will reject the write request with a NotEnoughReplicasException, choosing to temporarily halt incoming data rather than risking data corruption or silent loss.

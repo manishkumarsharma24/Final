@@ -1,0 +1,46 @@
+Data Structures and Algorithms (DSA) represent the foundational building blocks of computer science, where data structures organize and store data in memory while algorithms provide step-by-step instructions to process that data efficiently. Together, they optimize program speed, reduce memory usage, and form the backbone of modern software engineering.Core Concepts of DSAUnderstanding DSA requires balancing how data is arranged with how it is manipulated.+-------------------------------------------------------------+
+
+|               Data Structures & Algorithms                  |
++------------------------------+------------------------------+
+
+|       Data Structures        |          Algorithms          |
+|      (How data is stored)    |    (How data is processed)   |
++------------------------------+------------------------------+
+
+|  - Arrays & Strings          |  - Sorting & Searching       |
+|  - Linked Lists              |  - Recursion                 |
+|  - Stacks & Queues           |  - Divide & Conquer          |
+|  - Hash Tables               |  - Greedy Method             |
+|  - Trees & Graphs            |  - Dynamic Programming       |
++------------------------------+------------------------------+
+1. Essential Data Structures
+
+Data structures are categorized into linear (elements arranged sequentially) and non-linear (hierarchical or interconnected relationships) formats.
+
+Arrays: Fixed-size collections of elements stored in contiguous memory locations that allow instant access via index.
+
+Linked Lists: Sequences of nodes linked via pointers, allowing dynamic size adjustments and efficient insertions.
+
+Stacks: Linear structures operating on a Last-In, First-Out (LIFO) model, primarily used for undo mechanisms.
+
+Queues: Linear structures operating on a First-In, First-Out (FIFO) model, ideal for task scheduling.
+
+Hash Tables: Key-value pairings that utilize mapping functions to provide incredibly fast data retrieval.
+
+Trees: Hierarchical, non-linear structures consisting of parent and child nodes, often used for fast searching.
+
+Graphs: Networks of nodes (vertices) connected by pathways (edges), used to map social networks or GPS routing.
+
+2. Primary Algorithm Categories
+
+Algorithms dictate the logic used to solve programmatic problems or search through data structures.
+
+Searching: Techniques like Binary Search that locate specific elements within a dataset quickly.
+
+Sorting: Frameworks like Quick Sort and Merge Sort that order data systematically.
+
+Recursion: A method where a function calls itself to break large problems into smaller chunks.Greedy 
+
+Algorithms: Systems that make locally optimal choices at each step to find a global solution.Dynamic Programming: An optimization technique that solves complex problems by breaking them down and storing sub-problem results to avoid redundant calculations.
+
+3. Complexity Analysis (Big O Notation)Before writing code, developers use Big O Notation to calculate efficiency. It measures how code scales as input sizes grow.Time Complexity: The total execution time required for an algorithm to finish running.Space Complexity: The total amount of temporary memory space needed during execution.
